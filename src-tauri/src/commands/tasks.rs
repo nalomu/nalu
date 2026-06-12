@@ -87,7 +87,7 @@ pub fn get_tasks(project: Option<String>) -> Result<Vec<Task>, String> {
                 .prepare("SELECT id, project, title, done, COALESCE(progress,0), COALESCE(column_id,''), COALESCE(position,0), created_at, updated_at FROM tasks WHERE project = ?1 ORDER BY created_at DESC")
                 .map_err(|e| e.to_string())?;
             let rows: Vec<Task> = stmt
-                .query_map(rusqlite::params![p], |row| task_from_row(row))
+                .query_map(rusqlite::params![p], task_from_row)
                 .map_err(|e| e.to_string())?
                 .filter_map(|r| r.ok())
                 .collect();
@@ -98,7 +98,7 @@ pub fn get_tasks(project: Option<String>) -> Result<Vec<Task>, String> {
                 .prepare("SELECT id, project, title, done, COALESCE(progress,0), COALESCE(column_id,''), COALESCE(position,0), created_at, updated_at FROM tasks ORDER BY created_at DESC")
                 .map_err(|e| e.to_string())?;
             let rows: Vec<Task> = stmt
-                .query_map([], |row| task_from_row(row))
+                .query_map([], task_from_row)
                 .map_err(|e| e.to_string())?
                 .filter_map(|r| r.ok())
                 .collect();
@@ -201,7 +201,7 @@ pub fn update_task(id: String, title: String) -> Result<Task, String> {
     conn.query_row(
         "SELECT id, project, title, done, COALESCE(progress,0), COALESCE(column_id,''), COALESCE(position,0), created_at, updated_at FROM tasks WHERE id = ?1",
         rusqlite::params![id],
-        |row| task_from_row(row),
+        task_from_row,
     )
     .map_err(|e| e.to_string())
 }
@@ -258,7 +258,7 @@ pub fn get_board() -> Result<Vec<GroupData>, String> {
         .prepare("SELECT id, project, title, done, COALESCE(progress,0), COALESCE(column_id,''), COALESCE(position,0), created_at, updated_at FROM tasks ORDER BY position ASC")
         .map_err(|e| e.to_string())?;
     let all_tasks: Vec<Task> = task_stmt
-        .query_map([], |row| task_from_row(row))
+        .query_map([], task_from_row)
         .map_err(|e| e.to_string())?
         .filter_map(|r| r.ok())
         .collect();
@@ -503,35 +503,38 @@ pub fn rename_task_group(project: String, name: String) -> Result<GroupData, Str
             .ok_or_else(|| "Group not found".to_string());
     }
 
-    let mut db = get_connection()?;
-    let conn = db.as_mut().unwrap();
-    let tx = conn.transaction().map_err(|e| e.to_string())?;
-    sync_groups_from_columns(&tx)?;
+    {
+        let mut db = get_connection()?;
+        let conn = db.as_mut().unwrap();
+        let tx = conn.transaction().map_err(|e| e.to_string())?;
+        sync_groups_from_columns(&tx)?;
 
-    if !group_exists(&tx, &project)? {
-        return Err("Group not found".to_string());
-    }
-    if group_exists(&tx, &name)? {
-        return Err("GROUP_EXISTS".to_string());
-    }
+        if !group_exists(&tx, &project)? {
+            return Err("Group not found".to_string());
+        }
+        if group_exists(&tx, &name)? {
+            return Err("GROUP_EXISTS".to_string());
+        }
 
-    tx.execute(
-        "UPDATE task_columns SET project = ?1, updated_at = datetime('now') WHERE project = ?2",
-        rusqlite::params![name, project],
-    )
-    .map_err(|e| e.to_string())?;
-    tx.execute(
-        "UPDATE task_groups SET project = ?1, updated_at = datetime('now') WHERE project = ?2",
-        rusqlite::params![name, project],
-    )
-    .map_err(|e| e.to_string())?;
-    tx.execute(
-        "UPDATE tasks SET project = ?1, updated_at = datetime('now') WHERE project = ?2",
-        rusqlite::params![name, project],
-    )
-    .map_err(|e| e.to_string())?;
+        tx.execute(
+            "UPDATE task_columns SET project = ?1, updated_at = datetime('now') WHERE project = ?2",
+            rusqlite::params![name, project],
+        )
+        .map_err(|e| e.to_string())?;
+        tx.execute(
+            "UPDATE task_groups SET project = ?1, updated_at = datetime('now') WHERE project = ?2",
+            rusqlite::params![name, project],
+        )
+        .map_err(|e| e.to_string())?;
+        tx.execute(
+            "UPDATE tasks SET project = ?1, updated_at = datetime('now') WHERE project = ?2",
+            rusqlite::params![name, project],
+        )
+        .map_err(|e| e.to_string())?;
 
-    tx.commit().map_err(|e| e.to_string())?;
+        tx.commit().map_err(|e| e.to_string())?
+    };
+
     get_board()?
         .into_iter()
         .find(|group| group.project == name)
@@ -619,7 +622,7 @@ pub fn update_task_content(id: String, title: String) -> Result<Task, String> {
     conn.query_row(
         "SELECT id, project, title, done, COALESCE(progress,0), COALESCE(column_id,''), COALESCE(position,0), created_at, updated_at FROM tasks WHERE id = ?1",
         rusqlite::params![id],
-        |row| task_from_row(row),
+        task_from_row,
     )
     .map_err(|e| e.to_string())
 }
@@ -641,7 +644,7 @@ pub fn update_task_progress(id: String, progress: i32) -> Result<Task, String> {
     conn.query_row(
         "SELECT id, project, title, done, COALESCE(progress,0), COALESCE(column_id,''), COALESCE(position,0), created_at, updated_at FROM tasks WHERE id = ?1",
         rusqlite::params![id],
-        |row| task_from_row(row),
+        task_from_row,
     )
     .map_err(|e| e.to_string())
 }
@@ -657,7 +660,7 @@ pub fn delete_task_with_snapshot(id: String) -> Result<TaskSnapshot, String> {
         .query_row(
             "SELECT id, project, title, done, COALESCE(progress,0), COALESCE(column_id,''), COALESCE(position,0), created_at, updated_at FROM tasks WHERE id = ?1",
             rusqlite::params![id],
-            |row| task_from_row(row),
+            task_from_row,
         )
         .map_err(|e| e.to_string())?;
 
@@ -742,7 +745,7 @@ pub fn move_task(
     let task = tx.query_row(
         "SELECT id, project, title, done, COALESCE(progress,0), COALESCE(column_id,''), COALESCE(position,0), created_at, updated_at FROM tasks WHERE id = ?1",
         rusqlite::params![id],
-        |row| task_from_row(row),
+        task_from_row,
     )
     .map_err(|e| e.to_string())?;
 
@@ -821,7 +824,7 @@ pub fn create_column_by_drag(
         .query_row(
             "SELECT id, project, title, done, COALESCE(progress,0), COALESCE(column_id,''), COALESCE(position,0), created_at, updated_at FROM tasks WHERE id = ?1",
             rusqlite::params![task_id],
-            |row| task_from_row(row),
+            task_from_row,
         )
         .map_err(|e| e.to_string())?;
 

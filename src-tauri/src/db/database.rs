@@ -102,9 +102,7 @@ fn migrate_kanban_schema(conn: &Connection) -> Result<(), String> {
     .map_err(|e| e.to_string())?;
 
     // Check if progress column already exists
-    let has_progress: bool = conn
-        .prepare("SELECT progress FROM tasks LIMIT 1")
-        .is_ok();
+    let has_progress: bool = conn.prepare("SELECT progress FROM tasks LIMIT 1").is_ok();
 
     if !has_progress {
         // Add new columns to tasks table
@@ -242,7 +240,9 @@ fn migrate_existing_tasks_to_columns(conn: &Connection) -> Result<(), String> {
                 let mut first_id = String::new();
                 for (idx, name) in DEFAULT_COLUMNS.iter().enumerate() {
                     let new_id = uuid::Uuid::new_v4().to_string();
-                    if idx == 0 { first_id = new_id.clone(); }
+                    if idx == 0 {
+                        first_id = new_id.clone();
+                    }
                     conn.execute(
                         "INSERT INTO task_columns (id, project, name, sort_order) VALUES (?1, ?2, ?3, ?4)",
                         rusqlite::params![new_id, project, name, idx as i64],
