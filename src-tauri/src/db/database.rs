@@ -63,6 +63,22 @@ pub fn init(path: &std::path::Path) -> Result<(), String> {
             databases TEXT NOT NULL DEFAULT '',
             created_at TEXT NOT NULL DEFAULT (datetime('now'))
         );
+
+        CREATE TABLE IF NOT EXISTS changelog (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            table_name TEXT NOT NULL,
+            row_id TEXT NOT NULL,
+            operation TEXT NOT NULL,
+            payload TEXT NOT NULL,
+            client_ts INTEGER NOT NULL,
+            server_ts INTEGER,
+            synced INTEGER NOT NULL DEFAULT 0
+        );
+
+        CREATE TABLE IF NOT EXISTS sync_state (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
         ",
     )
     .map_err(|e| e.to_string())?;

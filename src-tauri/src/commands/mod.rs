@@ -7,4 +7,5 @@ pub mod mysql_users;
 pub mod notes;
 pub mod pomodoro;
 pub mod schedule;
+pub mod sync;
 pub mod tasks;

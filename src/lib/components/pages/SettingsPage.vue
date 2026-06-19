@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { storeToRefs } from 'pinia'
 import { invoke } from '@tauri-apps/api/core'
 import { enable, disable, isEnabled } from '@tauri-apps/plugin-autostart'
@@ -8,6 +8,7 @@ import { Save, Globe, Power, Sun, Moon, Monitor, Scissors, Volume2, FolderOpen, 
 import { getVersion } from '@tauri-apps/api/app'
 import { useSettingsStore } from '$lib/stores/settingsStore'
 import { useClipboardStore } from '$lib/stores/clipboardStore'
+import { useSyncStore } from '$lib/stores/syncStore'
 import { useI18n, type Locale } from '$lib/i18n'
 import { Input } from '$lib/components/ui/input'
 import type { ThemeMode } from '$lib/utils/theme'
@@ -15,6 +16,7 @@ import { PRESET_ALERT_SOUNDS, playAlertChime } from '$lib/utils/alertSound'
 
 const settings = useSettingsStore()
 const clipboardStore = useClipboardStore()
+const syncStore = useSyncStore()
 const { locale, theme, aiConfig, clipboardRetention, soundSettings } = storeToRefs(settings)
 const { t } = useI18n()
 const autostartEnabled = ref(false)
@@ -182,11 +184,30 @@ async function testAi() {
   aiTesting.value = false
 }
 
+// Sync state
+const syncServerUrl = ref('')
+const syncPairingCode = ref('')
+const syncDeviceName = ref('')
+const syncErrorText = computed(() =>
+  syncStore.error === 'Error: INVALID_SERVER_URL' || syncStore.error === 'INVALID_SERVER_URL'
+    ? t('settings.syncInvalidServerUrl')
+    : syncStore.error
+)
+
+async function syncPair() {
+  try {
+    await syncStore.pair(syncServerUrl.value, syncPairingCode.value, syncDeviceName.value || 'Desktop')
+  } catch {
+    // error handled by store
+  }
+}
+
 const appVersion = ref('0.0.0')
 
 onMounted(async () => {
   try { autostartEnabled.value = await isEnabled() } catch {}
   try { appVersion.value = await getVersion() } catch {}
+  syncStore.loadConfig()
   runCleanup()
 })
 </script>
@@ -403,6 +424,65 @@ onMounted(async () => {
             {{ aiTesting ? t('settings.testing') : t('settings.testConnection') }}
           </button>
           <span v-if="aiTestResult" class="text-xs" :class="aiTestResult.startsWith('Success') ? 'text-green-500' : 'text-red-500'">{{ aiTestResult }}</span></div>
+      </div>
+    </section>
+    <!-- Sync -->
+    <section class="bg-card rounded-xl p-4 border">
+      <h2 class="text-sm font-semibold mb-3 flex items-center gap-2">
+        <Globe class="w-4 h-4" />
+        {{ t('settings.sync') }}
+      </h2>
+      <div v-if="syncStore.isConfigured" class="space-y-3">
+        <div class="flex items-center gap-2 text-sm">
+          <span class="w-2 h-2 rounded-full" :class="syncStore.statusText === 'connected' ? 'bg-green-500' : syncStore.statusText === 'syncing' ? 'bg-yellow-500 animate-pulse' : 'bg-red-500'" />
+          <span class="text-muted-foreground">{{ syncStore.config?.server_url }}</span>
+          <span class="text-xs text-muted-foreground">({{ syncStore.config?.device_name }})</span>
+        </div>
+        <div class="flex items-center gap-2">
+          <button
+            class="px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm transition-colors hover:bg-primary/90"
+            :disabled="syncStore.isSyncing"
+            @click="syncStore.syncNow()"
+          >
+            {{ syncStore.isSyncing ? t('settings.syncing') : t('settings.syncNow') }}
+          </button>
+          <button class="px-4 py-2 rounded-lg bg-destructive/10 text-destructive text-sm" @click="syncStore.disconnect()">
+            {{ t('settings.syncDisconnect') }}
+          </button>
+        </div>
+        <p v-if="syncStore.lastSyncAt" class="text-xs text-muted-foreground">
+          {{ t('settings.syncLastSync') }}: {{ new Date(syncStore.lastSyncAt).toLocaleString() }}
+          <span v-if="syncStore.lastSyncResult">({{
+            syncStore.lastSyncResult.pushed_count > 0 ? `↑${syncStore.lastSyncResult.pushed_count}` : ''
+          }}{{
+            syncStore.lastSyncResult.pulled_count > 0 ? ` ↓${syncStore.lastSyncResult.pulled_count}` : ''
+          }}{{
+            syncStore.lastSyncResult.conflict_count > 0 ? ` ⚠${syncStore.lastSyncResult.conflict_count}` : ''
+          }})</span>
+        </p>
+      </div>
+      <div v-else class="space-y-3">
+        <p class="text-sm text-muted-foreground">{{ t('settings.syncDesc') }}</p>
+        <label class="block">
+          <span class="text-xs text-muted-foreground">{{ t('settings.syncServerUrl') }}</span>
+          <input v-model="syncServerUrl" type="text" :placeholder="t('settings.syncServerUrlPlaceholder')" class="w-full mt-1 px-3 py-2 rounded-lg border bg-background text-sm" />
+        </label>
+        <label class="block">
+          <span class="text-xs text-muted-foreground">{{ t('settings.syncPairingCode') }}</span>
+          <input v-model="syncPairingCode" type="text" placeholder="000000" maxlength="6" class="w-full mt-1 px-3 py-2 rounded-lg border bg-background text-sm font-mono tracking-widest" />
+        </label>
+        <label class="block">
+          <span class="text-xs text-muted-foreground">{{ t('settings.syncDeviceName') }}</span>
+          <input v-model="syncDeviceName" type="text" :placeholder="t('settings.syncDeviceNamePlaceholder')" class="w-full mt-1 px-3 py-2 rounded-lg border bg-background text-sm" />
+        </label>
+        <button
+          class="px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm transition-colors hover:bg-primary/90"
+          :disabled="!syncServerUrl || !syncPairingCode"
+          @click="syncPair()"
+        >
+          {{ t('settings.syncConnect') }}
+        </button>
+        <p v-if="syncErrorText" class="text-xs text-destructive">{{ syncErrorText }}</p>
       </div>
     </section>
     <section class="bg-card rounded-xl p-4 border"><h2 class="text-sm font-semibold mb-3">{{ t('settings.about') }}</h2>

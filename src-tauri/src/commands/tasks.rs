@@ -1,51 +1,7 @@
 use crate::db::database::get_connection;
-use serde::{Deserialize, Serialize};
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct Task {
-    pub id: String,
-    pub project: String,
-    pub title: String,
-    pub done: bool,
-    pub progress: i32,
-    pub column_id: String,
-    pub position: i64,
-    pub created_at: String,
-    pub updated_at: String,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct TaskColumn {
-    pub id: String,
-    pub project: String,
-    pub name: String,
-    pub sort_order: i64,
-    pub created_at: String,
-    pub updated_at: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ColumnWithTasks {
-    pub column: TaskColumn,
-    pub tasks: Vec<Task>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct GroupData {
-    pub project: String,
-    pub sort_order: i64,
-    pub columns: Vec<ColumnWithTasks>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct TaskSnapshot {
-    pub task: Task,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ColumnSnapshot {
-    pub column: TaskColumn,
-}
+use crate::sync::changelog;
+use nalu_shared::models::{ColumnSnapshot, ColumnWithTasks, GroupData, Task, TaskColumn, TaskSnapshot};
+use nalu_shared::sync_protocol::{OP_DELETE, OP_INSERT, OP_UPDATE};
 
 fn create_default_columns_for_project(
     conn: &rusqlite::Connection,
@@ -118,25 +74,35 @@ pub fn add_task(title: String, project: Option<String>) -> Result<Task, String> 
     let conn = db.as_ref().unwrap();
 
     // Find the first column for this project
-    let column_id: String = conn
+    let column_id: String = match conn
         .query_row(
             "SELECT id FROM task_columns WHERE project = ?1 ORDER BY sort_order ASC LIMIT 1",
             rusqlite::params![project],
             |row| row.get(0),
         )
-        .unwrap_or_else(|_| {
-            // Auto-create default columns (紧急, 重要, 一般) if missing
-            let mut first_id = String::new();
-            for (idx, name) in crate::db::database::DEFAULT_COLUMNS.iter().enumerate() {
-                let col_id = uuid::Uuid::new_v4().to_string();
-                if idx == 0 { first_id = col_id.clone(); }
-                let _ = conn.execute(
-                    "INSERT INTO task_columns (id, project, name, sort_order) VALUES (?1, ?2, ?3, ?4)",
-                    rusqlite::params![col_id, project, name, idx as i64],
-                );
+        .ok()
+    {
+        Some(column_id) => column_id,
+        None => {
+            if !group_exists(conn, &project)? {
+                let sort_order = next_group_sort_order(conn)?;
+                conn.execute(
+                    "INSERT INTO task_groups (project, sort_order) VALUES (?1, ?2)",
+                    rusqlite::params![project, sort_order],
+                )
+                .map_err(|e| e.to_string())?;
+                record_group_change(conn, &project, sort_order, OP_INSERT)?;
             }
-            first_id
-        });
+            let columns = create_default_columns_for_project(conn, &project)?;
+            for column in &columns {
+                record_column_change(conn, column, OP_INSERT)?;
+            }
+            columns
+                .first()
+                .map(|column| column.id.clone())
+                .ok_or_else(|| "Failed to create default columns".to_string())?
+        }
+    };
 
     // Calculate position (append at end)
     let max_pos: i64 = conn
@@ -153,7 +119,7 @@ pub fn add_task(title: String, project: Option<String>) -> Result<Task, String> 
     )
     .map_err(|e| e.to_string())?;
 
-    Ok(Task {
+    let task = Task {
         id,
         project,
         title,
@@ -163,7 +129,9 @@ pub fn add_task(title: String, project: Option<String>) -> Result<Task, String> 
         position: max_pos,
         created_at: chrono::Utc::now().to_rfc3339(),
         updated_at: chrono::Utc::now().to_rfc3339(),
-    })
+    };
+    changelog::record_change(conn, "tasks", &task.id, OP_INSERT, &serde_json::to_string(&task).unwrap_or_default())?;
+    Ok(task)
 }
 
 #[tauri::command]
@@ -185,6 +153,13 @@ pub fn toggle_task(id: String) -> Result<bool, String> {
         .map_err(|e| e.to_string())?
         != 0;
 
+    // Record changelog
+    let task = conn.query_row(
+        "SELECT id, project, title, done, COALESCE(progress,0), COALESCE(column_id,''), COALESCE(position,0), created_at, updated_at FROM tasks WHERE id = ?1",
+        rusqlite::params![id], task_from_row,
+    ).map_err(|e| e.to_string())?;
+    changelog::record_change(conn, "tasks", &task.id, OP_UPDATE, &serde_json::to_string(&task).unwrap_or_default())?;
+
     Ok(done)
 }
 
@@ -198,12 +173,14 @@ pub fn update_task(id: String, title: String) -> Result<Task, String> {
     )
     .map_err(|e| e.to_string())?;
 
-    conn.query_row(
+    let task = conn.query_row(
         "SELECT id, project, title, done, COALESCE(progress,0), COALESCE(column_id,''), COALESCE(position,0), created_at, updated_at FROM tasks WHERE id = ?1",
         rusqlite::params![id],
         task_from_row,
     )
-    .map_err(|e| e.to_string())
+    .map_err(|e| e.to_string())?;
+    changelog::record_change(conn, "tasks", &task.id, OP_UPDATE, &serde_json::to_string(&task).unwrap_or_default())?;
+    Ok(task)
 }
 
 #[tauri::command]
@@ -212,6 +189,7 @@ pub fn delete_task(id: String) -> Result<(), String> {
     let conn = db.as_ref().unwrap();
     conn.execute("DELETE FROM tasks WHERE id = ?1", rusqlite::params![id])
         .map_err(|e| e.to_string())?;
+    changelog::record_change(conn, "tasks", &id, OP_DELETE, "{}")?;
     Ok(())
 }
 
@@ -323,13 +301,18 @@ pub fn create_task_group(project: String) -> Result<GroupData, String> {
     )
     .map_err(|e| e.to_string())?;
 
-    let columns = create_default_columns_for_project(&tx, &project)?
+    let columns: Vec<ColumnWithTasks> = create_default_columns_for_project(&tx, &project)?
         .into_iter()
         .map(|column| ColumnWithTasks {
             column,
             tasks: Vec::new(),
         })
         .collect();
+
+    record_group_change(&tx, &project, next_order, OP_INSERT)?;
+    for column in &columns {
+        record_column_change(&tx, &column.column, OP_INSERT)?;
+    }
 
     tx.commit().map_err(|e| e.to_string())?;
     Ok(GroupData {
@@ -364,6 +347,18 @@ pub fn delete_task_group(project: String) -> Result<(), String> {
         return Err("HAS_INCOMPLETE_TASKS".to_string());
     }
 
+    let deleted_task_ids: Vec<String> = {
+        let mut stmt = tx
+            .prepare("SELECT id FROM tasks WHERE project = ?1")
+            .map_err(|e| e.to_string())?;
+        stmt.query_map(rusqlite::params![project], |row| row.get(0))
+            .map_err(|e| e.to_string())?
+            .filter_map(|r| r.ok())
+            .collect()
+    };
+    let deleted_columns = load_columns_for_project(&tx, &project)?;
+    let deleted_group_order = group_sort_order(&tx, &project)?;
+
     tx.execute(
         "DELETE FROM tasks WHERE project = ?1",
         rusqlite::params![project],
@@ -379,6 +374,14 @@ pub fn delete_task_group(project: String) -> Result<(), String> {
         rusqlite::params![project],
     )
     .map_err(|e| e.to_string())?;
+
+    for task_id in deleted_task_ids {
+        changelog::record_change(&tx, "tasks", &task_id, OP_DELETE, "{}")?;
+    }
+    for column in deleted_columns {
+        record_column_change(&tx, &column, OP_DELETE)?;
+    }
+    record_group_change(&tx, &project, deleted_group_order, OP_DELETE)?;
 
     tx.commit().map_err(|e| e.to_string())?;
     Ok(())
@@ -421,8 +424,25 @@ pub fn copy_task_group(project: String) -> Result<GroupData, String> {
         rusqlite::params![&copy_project, source_order],
     )
     .map_err(|e| e.to_string())?;
+    let shifted_groups: Vec<(String, i64)> = {
+        let mut stmt = tx
+            .prepare(
+                "SELECT project, sort_order FROM task_groups WHERE project != ?1 AND sort_order > ?2",
+            )
+            .map_err(|e| e.to_string())?;
+        stmt.query_map(rusqlite::params![&copy_project, source_order], |row| {
+            Ok((row.get(0)?, row.get(1)?))
+        })
+        .map_err(|e| e.to_string())?
+        .filter_map(|r| r.ok())
+        .collect()
+    };
     let source_columns = load_columns_for_project(&tx, &project)?;
     let mut copied_columns = Vec::new();
+    record_group_change(&tx, &copy_project, source_order, OP_INSERT)?;
+    for (project, sort_order) in shifted_groups {
+        record_group_change(&tx, &project, sort_order, OP_UPDATE)?;
+    }
 
     for column in source_columns {
         let copied_column_id = uuid::Uuid::new_v4().to_string();
@@ -469,6 +489,11 @@ pub fn copy_task_group(project: String) -> Result<GroupData, String> {
                 )
                 .map_err(|e| e.to_string())?;
             copied_tasks.push(copied_task);
+        }
+
+        record_column_change(&tx, &copied_column, OP_INSERT)?;
+        for task in &copied_tasks {
+            changelog::record_change(&tx, "tasks", &task.id, OP_INSERT, &serde_json::to_string(task).unwrap_or_default())?;
         }
 
         copied_columns.push(ColumnWithTasks {
@@ -532,6 +557,28 @@ pub fn rename_task_group(project: String, name: String) -> Result<GroupData, Str
         )
         .map_err(|e| e.to_string())?;
 
+        record_group_change(&tx, &project, 0, OP_DELETE)?;
+        let renamed_order = group_sort_order(&tx, &name)?;
+        record_group_change(&tx, &name, renamed_order, OP_INSERT)?;
+
+        let renamed_columns = load_columns_for_project(&tx, &name)?;
+        for column in &renamed_columns {
+            record_column_change(&tx, column, OP_UPDATE)?;
+        }
+
+        let renamed_tasks: Vec<Task> = {
+            let mut stmt = tx
+                .prepare("SELECT id, project, title, done, COALESCE(progress,0), COALESCE(column_id,''), COALESCE(position,0), created_at, updated_at FROM tasks WHERE project = ?1")
+                .map_err(|e| e.to_string())?;
+            stmt.query_map(rusqlite::params![name], task_from_row)
+                .map_err(|e| e.to_string())?
+                .filter_map(|r| r.ok())
+                .collect()
+        };
+        for task in &renamed_tasks {
+            changelog::record_change(&tx, "tasks", &task.id, OP_UPDATE, &serde_json::to_string(task).unwrap_or_default())?;
+        }
+
         tx.commit().map_err(|e| e.to_string())?
     };
 
@@ -553,6 +600,7 @@ pub fn reorder_task_groups(projects: Vec<String>) -> Result<(), String> {
             rusqlite::params![i as i64, project],
         )
         .map_err(|e| e.to_string())?;
+        record_group_change(conn, project, i as i64, OP_UPDATE)?;
     }
     Ok(())
 }
@@ -595,7 +643,7 @@ pub fn add_task_to_column(title: String, column_id: String) -> Result<Task, Stri
     )
     .map_err(|e| e.to_string())?;
 
-    Ok(Task {
+    let task = Task {
         id,
         project,
         title,
@@ -605,7 +653,9 @@ pub fn add_task_to_column(title: String, column_id: String) -> Result<Task, Stri
         position: max_pos,
         created_at: chrono::Utc::now().to_rfc3339(),
         updated_at: chrono::Utc::now().to_rfc3339(),
-    })
+    };
+    changelog::record_change(conn, "tasks", &task.id, OP_INSERT, &serde_json::to_string(&task).unwrap_or_default())?;
+    Ok(task)
 }
 
 /// Update task content (inline edit).
@@ -619,12 +669,14 @@ pub fn update_task_content(id: String, title: String) -> Result<Task, String> {
     )
     .map_err(|e| e.to_string())?;
 
-    conn.query_row(
+    let task = conn.query_row(
         "SELECT id, project, title, done, COALESCE(progress,0), COALESCE(column_id,''), COALESCE(position,0), created_at, updated_at FROM tasks WHERE id = ?1",
         rusqlite::params![id],
         task_from_row,
     )
-    .map_err(|e| e.to_string())
+    .map_err(|e| e.to_string())?;
+    changelog::record_change(conn, "tasks", &task.id, OP_UPDATE, &serde_json::to_string(&task).unwrap_or_default())?;
+    Ok(task)
 }
 
 /// Update task progress. Syncs done field: progress=100 → done=true, else done=false.
@@ -641,12 +693,14 @@ pub fn update_task_progress(id: String, progress: i32) -> Result<Task, String> {
     )
     .map_err(|e| e.to_string())?;
 
-    conn.query_row(
+    let task = conn.query_row(
         "SELECT id, project, title, done, COALESCE(progress,0), COALESCE(column_id,''), COALESCE(position,0), created_at, updated_at FROM tasks WHERE id = ?1",
         rusqlite::params![id],
         task_from_row,
     )
-    .map_err(|e| e.to_string())
+    .map_err(|e| e.to_string())?;
+    changelog::record_change(conn, "tasks", &task.id, OP_UPDATE, &serde_json::to_string(&task).unwrap_or_default())?;
+    Ok(task)
 }
 
 /// Delete a task and return its snapshot for undo.
@@ -666,6 +720,7 @@ pub fn delete_task_with_snapshot(id: String) -> Result<TaskSnapshot, String> {
 
     conn.execute("DELETE FROM tasks WHERE id = ?1", rusqlite::params![id])
         .map_err(|e| e.to_string())?;
+    changelog::record_change(conn, "tasks", &id, OP_DELETE, "{}")?;
 
     Ok(TaskSnapshot { task })
 }
@@ -681,6 +736,7 @@ pub fn restore_task(snapshot: TaskSnapshot) -> Result<Task, String> {
         rusqlite::params![t.id, t.project, t.title, t.done, t.progress, t.column_id, t.position, t.created_at, t.updated_at],
     )
     .map_err(|e| e.to_string())?;
+    changelog::record_change(conn, "tasks", &t.id, OP_INSERT, &serde_json::to_string(t).unwrap_or_default())?;
     Ok(snapshot.task)
 }
 
@@ -748,6 +804,8 @@ pub fn move_task(
         task_from_row,
     )
     .map_err(|e| e.to_string())?;
+
+    record_tasks_for_columns(&tx, &[&old_column_id, &target_column_id])?;
 
     tx.commit().map_err(|e| e.to_string())?;
     Ok(task)
@@ -828,6 +886,9 @@ pub fn create_column_by_drag(
         )
         .map_err(|e| e.to_string())?;
 
+    record_column_change(&tx, &col, OP_INSERT)?;
+    record_tasks_for_columns(&tx, &[&old_column_id, &col.id])?;
+
     tx.commit().map_err(|e| e.to_string())?;
     Ok((col, task))
 }
@@ -843,7 +904,7 @@ pub fn rename_column(id: String, name: String) -> Result<TaskColumn, String> {
     )
     .map_err(|e| e.to_string())?;
 
-    conn.query_row(
+    let column = conn.query_row(
         "SELECT id, project, name, sort_order, created_at, updated_at FROM task_columns WHERE id = ?1",
         rusqlite::params![id],
         |row| {
@@ -857,7 +918,9 @@ pub fn rename_column(id: String, name: String) -> Result<TaskColumn, String> {
             })
         },
     )
-    .map_err(|e| e.to_string())
+    .map_err(|e| e.to_string())?;
+    record_column_change(conn, &column, OP_UPDATE)?;
+    Ok(column)
 }
 
 /// Reorder columns within a group. Receives ordered list of column IDs.
@@ -871,6 +934,14 @@ pub fn reorder_columns(column_ids: Vec<String>) -> Result<(), String> {
             rusqlite::params![i as i64, col_id],
         )
         .map_err(|e| e.to_string())?;
+        let column = conn
+            .query_row(
+                "SELECT id, project, name, sort_order, created_at, updated_at FROM task_columns WHERE id = ?1",
+                rusqlite::params![col_id],
+                column_from_row,
+            )
+            .map_err(|e| e.to_string())?;
+        record_column_change(conn, &column, OP_UPDATE)?;
     }
     Ok(())
 }
@@ -931,6 +1002,7 @@ pub fn delete_column(id: String) -> Result<ColumnSnapshot, String> {
         rusqlite::params![id],
     )
     .map_err(|e| e.to_string())?;
+    record_column_change(conn, &col, OP_DELETE)?;
 
     // Reorder remaining columns
     let mut stmt = conn
@@ -942,10 +1014,17 @@ pub fn delete_column(id: String) -> Result<ColumnSnapshot, String> {
         .filter_map(|r| r.ok())
         .collect();
     for (i, cid) in remaining.iter().enumerate() {
-        let _ = conn.execute(
+        conn.execute(
             "UPDATE task_columns SET sort_order = ?1 WHERE id = ?2",
             rusqlite::params![i as i64, cid],
-        );
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    drop(stmt);
+
+    let remaining_columns = load_columns_for_project(conn, &col.project)?;
+    for column in &remaining_columns {
+        record_column_change(conn, column, OP_UPDATE)?;
     }
 
     Ok(ColumnSnapshot { column: col })
@@ -962,6 +1041,7 @@ pub fn restore_column(snapshot: ColumnSnapshot) -> Result<TaskColumn, String> {
         rusqlite::params![c.id, c.project, c.name, c.sort_order, c.created_at, c.updated_at],
     )
     .map_err(|e| e.to_string())?;
+    record_column_change(conn, c, OP_INSERT)?;
     Ok(snapshot.column)
 }
 
@@ -990,6 +1070,68 @@ fn column_from_row(row: &rusqlite::Row) -> rusqlite::Result<TaskColumn> {
         created_at: row.get(4)?,
         updated_at: row.get(5)?,
     })
+}
+
+fn group_payload(project: &str, sort_order: i64) -> String {
+    serde_json::json!({
+        "project": project,
+        "sort_order": sort_order,
+    })
+    .to_string()
+}
+
+fn record_group_change(
+    conn: &rusqlite::Connection,
+    project: &str,
+    sort_order: i64,
+    operation: &str,
+) -> Result<(), String> {
+    let payload = if operation == OP_DELETE {
+        "{}".to_string()
+    } else {
+        group_payload(project, sort_order)
+    };
+    changelog::record_change(conn, "task_groups", project, operation, &payload)
+}
+
+fn record_column_change(
+    conn: &rusqlite::Connection,
+    column: &TaskColumn,
+    operation: &str,
+) -> Result<(), String> {
+    let payload = if operation == OP_DELETE {
+        "{}".to_string()
+    } else {
+        serde_json::to_string(column).unwrap_or_default()
+    };
+    changelog::record_change(conn, "task_columns", &column.id, operation, &payload)
+}
+
+fn record_tasks_for_columns(conn: &rusqlite::Connection, column_ids: &[&str]) -> Result<(), String> {
+    let mut seen = std::collections::HashSet::new();
+    for column_id in column_ids {
+        if !seen.insert((*column_id).to_string()) {
+            continue;
+        }
+        let mut stmt = conn
+            .prepare("SELECT id, project, title, done, COALESCE(progress,0), COALESCE(column_id,''), COALESCE(position,0), created_at, updated_at FROM tasks WHERE column_id = ?1 ORDER BY position ASC")
+            .map_err(|e| e.to_string())?;
+        let tasks: Vec<Task> = stmt
+            .query_map(rusqlite::params![column_id], task_from_row)
+            .map_err(|e| e.to_string())?
+            .filter_map(|r| r.ok())
+            .collect();
+        for task in &tasks {
+            changelog::record_change(
+                conn,
+                "tasks",
+                &task.id,
+                OP_UPDATE,
+                &serde_json::to_string(task).unwrap_or_default(),
+            )?;
+        }
+    }
+    Ok(())
 }
 
 fn load_columns_for_project(
@@ -1104,10 +1246,11 @@ fn normalize_positions(conn: &rusqlite::Connection, column_id: &str) -> Result<(
         .filter_map(|r| r.ok())
         .collect();
     for (i, tid) in ids.iter().enumerate() {
-        let _ = conn.execute(
+        conn.execute(
             "UPDATE tasks SET position = ?1 WHERE id = ?2",
             rusqlite::params![i as i64, tid],
-        );
+        )
+        .map_err(|e| e.to_string())?;
     }
     Ok(())
 }
@@ -1134,6 +1277,27 @@ mod tests {
             .find(|group| group.project == project)
             .map(|group| group.columns.len())
             .unwrap_or(0)
+    }
+
+    fn changelog_count(table_name: &str, operation: Option<&str>) -> i64 {
+        let db = crate::db::database::get_connection().unwrap();
+        let conn = db.as_ref().unwrap();
+        match operation {
+            Some(operation) => conn
+                .query_row(
+                    "SELECT COUNT(*) FROM changelog WHERE table_name = ?1 AND operation = ?2",
+                    rusqlite::params![table_name, operation],
+                    |row| row.get(0),
+                )
+                .unwrap(),
+            None => conn
+                .query_row(
+                    "SELECT COUNT(*) FROM changelog WHERE table_name = ?1",
+                    rusqlite::params![table_name],
+                    |row| row.get(0),
+                )
+                .unwrap(),
+        }
     }
 
     #[test]
@@ -1189,6 +1353,31 @@ mod tests {
         assert_eq!(moved_task.project, "side");
         assert_eq!(moved_task.column_id, side_column_id);
         assert_eq!(moved_task.position, 0);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn add_task_to_new_group_records_group_and_column_changes() {
+        let (_guard, path) = setup_test_db();
+
+        add_task("side task".to_string(), Some("side".to_string())).unwrap();
+
+        assert!(changelog_count("task_groups", Some(OP_INSERT)) >= 1);
+        assert!(changelog_count("task_columns", Some(OP_INSERT)) >= 2);
+        assert!(changelog_count("tasks", Some(OP_INSERT)) >= 1);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn move_task_records_position_updates_for_affected_columns() {
+        let (_guard, path) = setup_test_db();
+        let first = add_task("first".to_string(), Some("default".to_string())).unwrap();
+        let _second = add_task("second".to_string(), Some("default".to_string())).unwrap();
+        let column_id = first.column_id.clone();
+
+        move_task(first.id, column_id, 1).unwrap();
+
+        assert!(changelog_count("tasks", Some(OP_UPDATE)) >= 2);
         let _ = std::fs::remove_file(path);
     }
 

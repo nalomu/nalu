@@ -1,5 +1,6 @@
 mod commands;
 mod db;
+mod sync;
 
 use std::sync::Mutex;
 #[cfg(target_os = "macos")]
@@ -868,6 +869,10 @@ pub fn run() {
             commands::alarm::skip_next_alarm,
             commands::alarm::toggle_alarm,
             commands::alarm::delete_alarm,
+            commands::sync::sync_pair,
+            commands::sync::sync_now,
+            commands::sync::sync_get_config,
+            commands::sync::sync_disconnect,
             update_tray_menu,
         ])
         // Setup

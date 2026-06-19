@@ -1,15 +1,7 @@
 use crate::db::database::get_connection;
-use serde::{Deserialize, Serialize};
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct Schedule {
-    pub id: String,
-    pub title: String,
-    pub scheduled_at: String,
-    pub reminder_minutes: i32,
-    pub done: bool,
-    pub created_at: String,
-}
+use crate::sync::changelog;
+use nalu_shared::models::Schedule;
+use nalu_shared::sync_protocol::{OP_DELETE, OP_INSERT, OP_UPDATE};
 
 #[tauri::command]
 pub fn get_schedules() -> Result<Vec<Schedule>, String> {
@@ -52,14 +44,24 @@ pub fn add_schedule(
     )
     .map_err(|e| e.to_string())?;
 
-    Ok(Schedule {
+    let schedule = Schedule {
         id,
         title,
         scheduled_at,
         reminder_minutes,
         done: false,
         created_at: chrono::Utc::now().to_rfc3339(),
-    })
+    };
+
+    changelog::record_change(
+        conn,
+        "schedules",
+        &schedule.id,
+        OP_INSERT,
+        &serde_json::to_string(&schedule).unwrap_or_default(),
+    )?;
+
+    Ok(schedule)
 }
 
 #[tauri::command]
@@ -79,6 +81,28 @@ pub fn toggle_schedule(id: String) -> Result<bool, String> {
         )
         .map_err(|e| e.to_string())?
         != 0;
+
+    let schedule = conn.query_row(
+        "SELECT id, title, scheduled_at, reminder_minutes, done, created_at FROM schedules WHERE id = ?1",
+        rusqlite::params![id],
+        |row| Ok(Schedule {
+            id: row.get(0)?,
+            title: row.get(1)?,
+            scheduled_at: row.get(2)?,
+            reminder_minutes: row.get(3)?,
+            done: row.get::<_, i32>(4)? != 0,
+            created_at: row.get(5)?,
+        }),
+    ).map_err(|e| e.to_string())?;
+
+    changelog::record_change(
+        conn,
+        "schedules",
+        &schedule.id,
+        OP_UPDATE,
+        &serde_json::to_string(&schedule).unwrap_or_default(),
+    )?;
+
     Ok(done)
 }
 
@@ -88,5 +112,7 @@ pub fn delete_schedule(id: String) -> Result<(), String> {
     let conn = db.as_ref().unwrap();
     conn.execute("DELETE FROM schedules WHERE id = ?1", rusqlite::params![id])
         .map_err(|e| e.to_string())?;
+
+    changelog::record_change(conn, "schedules", &id, OP_DELETE, "{}")?;
     Ok(())
 }

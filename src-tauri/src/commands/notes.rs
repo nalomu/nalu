@@ -1,16 +1,7 @@
 use crate::db::database::get_connection;
-use serde::{Deserialize, Serialize};
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct Note {
-    pub id: String,
-    pub title: String,
-    pub content: String,
-    pub tags: String,
-    pub note_type: String,
-    pub created_at: String,
-    pub updated_at: String,
-}
+use crate::sync::changelog;
+use nalu_shared::models::Note;
+use nalu_shared::sync_protocol::{OP_DELETE, OP_INSERT, OP_UPDATE};
 
 #[tauri::command]
 pub fn get_notes(note_type: Option<String>) -> Result<Vec<Note>, String> {
@@ -85,7 +76,7 @@ pub fn add_note(
     )
     .map_err(|e| e.to_string())?;
 
-    Ok(Note {
+    let note = Note {
         id,
         title,
         content,
@@ -93,7 +84,17 @@ pub fn add_note(
         note_type,
         created_at: chrono::Utc::now().to_rfc3339(),
         updated_at: chrono::Utc::now().to_rfc3339(),
-    })
+    };
+
+    changelog::record_change(
+        conn,
+        "notes",
+        &note.id,
+        OP_INSERT,
+        &serde_json::to_string(&note).unwrap_or_default(),
+    )?;
+
+    Ok(note)
 }
 
 #[tauri::command]
@@ -128,6 +129,29 @@ pub fn update_note(
         .map_err(|e| e.to_string())?;
     }
 
+    // Record changelog with the full updated note
+    let note: Note = conn.query_row(
+        "SELECT id, title, content, tags, note_type, created_at, updated_at FROM notes WHERE id = ?1",
+        rusqlite::params![id],
+        |row| Ok(Note {
+            id: row.get(0)?,
+            title: row.get(1)?,
+            content: row.get(2)?,
+            tags: row.get(3)?,
+            note_type: row.get(4)?,
+            created_at: row.get(5)?,
+            updated_at: row.get(6)?,
+        }),
+    ).map_err(|e| e.to_string())?;
+
+    changelog::record_change(
+        conn,
+        "notes",
+        &note.id,
+        OP_UPDATE,
+        &serde_json::to_string(&note).unwrap_or_default(),
+    )?;
+
     Ok(())
 }
 
@@ -137,5 +161,7 @@ pub fn delete_note(id: String) -> Result<(), String> {
     let conn = db.as_ref().unwrap();
     conn.execute("DELETE FROM notes WHERE id = ?1", rusqlite::params![id])
         .map_err(|e| e.to_string())?;
+
+    changelog::record_change(conn, "notes", &id, OP_DELETE, "{}")?;
     Ok(())
 }
