@@ -1,5 +1,6 @@
 import { createRouter, createWebHashHistory } from "vue-router";
 import AppLayout from "$lib/components/AppLayout.vue";
+import { MOBILE_BREAKPOINT, MOBILE_ROUTES } from "$lib/composables/useMobile";
 
 const routes = [
   {
@@ -25,7 +26,19 @@ const routes = [
   },
 ];
 
-export default createRouter({
+const router = createRouter({
   history: createWebHashHistory(),
   routes,
 });
+
+// Mobile route guard: redirect disabled features to dashboard.
+router.beforeEach((to) => {
+  if (typeof window !== "undefined" && window.innerWidth < MOBILE_BREAKPOINT) {
+    const name = to.name as string;
+    if (name && !MOBILE_ROUTES.includes(name)) {
+      return { name: "dashboard" };
+    }
+  }
+});
+
+export default router;

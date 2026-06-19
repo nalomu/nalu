@@ -10,9 +10,11 @@ import { useClipboardStore } from '$lib/stores/clipboardStore'
 import { useI18n } from '$lib/i18n'
 import AiChatWidget from '$lib/components/AiChatWidget.vue'
 import { useAiRefresh } from '$lib/composables/useAiRefresh'
+import { useMobile } from '$lib/composables/useMobile'
 
 const router = useRouter()
 const { t } = useI18n()
+const { isMobile, isRouteEnabled } = useMobile()
 const clipboard = useClipboardStore()
 const { monitoring } = storeToRefs(clipboard)
 const tasks = ref<Task[]>([])
@@ -151,17 +153,18 @@ useAiRefresh(loadData)
     <!-- Quick nav -->
     <section class="mb-8">
       <h2 class="text-xs font-semibold text-muted-foreground mb-3 uppercase tracking-wider">{{ t('dashboardExt.quickNav') }}</h2>
-      <div class="grid grid-cols-4 gap-2.5">
-        <button v-for="[id, label, icon, color] in quickNav" :key="id" class="flex flex-col items-center gap-2 px-3 py-3.5 rounded-xl bg-card border cursor-pointer transition-all duration-200 hover:border-primary/40 hover:shadow-sm hover:-translate-y-0.5 active:translate-y-0 active:shadow-none" @click="router.push(`/${id}`)">
+      <div class="grid grid-cols-3 sm:grid-cols-4 gap-2.5">
+        <button v-for="[id, label, icon, color] in quickNav.filter(([id]) => isRouteEnabled(id))" :key="id" class="flex flex-col items-center gap-2 px-3 py-3.5 rounded-xl bg-card border cursor-pointer transition-all duration-200 hover:border-primary/40 hover:shadow-sm hover:-translate-y-0.5 active:translate-y-0 active:shadow-none" @click="router.push(`/${id}`)">
           <component :is="icon" class="w-5 h-5" :class="color" />
           <span class="text-xs text-muted-foreground">{{ t(label) }}</span>
         </button>
       </div>
     </section>
 
-    <!-- Time-critical row: Pomodoro + Next Schedule -->
-    <section class="grid grid-cols-2 gap-4 mb-6">
+    <!-- Time-critical row: Pomodoro + Next Schedule (desktop only pomodoro) -->
+    <section class="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
       <button
+        v-if="!isMobile"
         class="text-left bg-card rounded-xl p-4 border hover:shadow-sm transition relative overflow-hidden"
         @click="router.push('/pomodoro')"
       >
@@ -274,7 +277,7 @@ useAiRefresh(loadData)
     </div>
 
     <!-- Clipboard -->
-    <section class="mb-6">
+    <section v-if="!isMobile" class="mb-6">
       <div class="flex justify-between mb-3">
         <h2 class="text-xs font-semibold text-muted-foreground uppercase tracking-wider">{{ t('dashboardExt.clipboardStatus') }}</h2>
         <button class="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-primary transition-colors" @click="clipboard.toggleMonitoring">

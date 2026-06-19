@@ -7,28 +7,37 @@ import {
 } from 'lucide-vue-next'
 import { getVersion } from '@tauri-apps/api/app'
 import { useI18n } from '$lib/i18n'
+import { useMobile } from '$lib/composables/useMobile'
 
 const emit = defineEmits<{ command: [] }>()
 const route = useRoute()
 const router = useRouter()
 const { t, version } = useI18n()
+const { isRouteEnabled } = useMobile()
 const appVersion = ref('0.0.0')
 onMounted(async () => { appVersion.value = await getVersion() })
 
+const allItems = [
+  { id: 'dashboard', path: '/', labelKey: 'dashboard', icon: LayoutDashboard },
+  { id: 'tasks', path: '/tasks', labelKey: 'tasks', icon: CheckSquare },
+  { id: 'notes', path: '/notes', labelKey: 'notes', icon: FileText },
+  { id: 'clipboard', path: '/clipboard', labelKey: 'clipboard', icon: Scissors },
+  { id: 'pomodoro', path: '/pomodoro', labelKey: 'pomodoro', icon: Timer },
+  { id: 'schedule', path: '/schedule', labelKey: 'schedule', icon: Calendar },
+  { id: 'mysql', path: '/mysql', labelKey: 'mysql', icon: Database },
+  { id: 'alarm', path: '/alarm', labelKey: 'alarm', icon: AlarmClock },
+  { id: 'ai', path: '/ai', labelKey: 'ai', icon: Sparkles },
+  { id: 'settings', path: '/settings', labelKey: 'settings', icon: Settings },
+]
+
 const navItems = computed(() => {
   void version.value
-  return [
-    { id: 'dashboard', path: '/', label: t('nav.dashboard'), icon: LayoutDashboard },
-    { id: 'tasks', path: '/tasks', label: t('nav.tasks'), icon: CheckSquare },
-    { id: 'notes', path: '/notes', label: t('nav.notes'), icon: FileText },
-    { id: 'clipboard', path: '/clipboard', label: t('nav.clipboard'), icon: Scissors },
-    { id: 'pomodoro', path: '/pomodoro', label: t('nav.pomodoro'), icon: Timer },
-    { id: 'schedule', path: '/schedule', label: t('nav.schedule'), icon: Calendar },
-    { id: 'mysql', path: '/mysql', label: t('nav.mysql'), icon: Database },
-    { id: 'alarm', path: '/alarm', label: t('nav.alarm'), icon: AlarmClock },
-    { id: 'ai', path: '/ai', label: t('nav.ai'), icon: Sparkles },
-    { id: 'settings', path: '/settings', label: t('nav.settings'), icon: Settings }
-  ]
+  return allItems
+    .filter((item) => isRouteEnabled(item.id))
+    .map((item) => ({
+      ...item,
+      label: t(`nav.${item.labelKey}`),
+    }))
 })
 </script>
 

@@ -3,11 +3,14 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { Plus, Search, ChevronDown, ChevronRight, Trash2, MoreHorizontal, GripHorizontal, Circle, CheckCircle2, Copy } from 'lucide-vue-next'
 import type { GroupData, Task, TaskColumn, ColumnWithTasks, TaskSnapshot, ColumnSnapshot } from '$lib/types'
+import { useMobile } from '$lib/composables/useMobile'
 import { useI18n } from '$lib/i18n'
 import { Input } from '$lib/components/ui/input'
 import { useAiRefresh } from '$lib/composables/useAiRefresh'
 
 const { t } = useI18n()
+
+const { isMobile } = useMobile()
 
 // Board data
 const groups = ref<GroupData[]>([])
@@ -966,7 +969,7 @@ useAiRefresh(loadBoard)
 <template>
   <div class="h-full flex flex-col">
     <!-- Header -->
-    <div class="px-6 pt-6 pb-3">
+    <div :class="isMobile ? 'px-3 pt-3 pb-2' : 'px-6 pt-6 pb-3'">
       <div class="mb-4 flex flex-wrap items-center gap-3">
         <h1 class="text-2xl font-bold mr-auto">{{ t('tasks.title') }}</h1>
         <div v-if="addingGroup" class="flex items-center gap-2">

@@ -4,7 +4,9 @@ import { RouterView, useRouter } from 'vue-router'
 import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import Sidebar from './Sidebar.vue'
+import MobileTabBar from './MobileTabBar.vue'
 import CommandPalette from './CommandPalette.vue'
+import { useMobile } from '$lib/composables/useMobile'
 import type { CommandItem } from '$lib/types'
 import { useI18n } from '$lib/i18n'
 import { initGlobalNotifications } from '$lib/utils/notifications'
@@ -15,6 +17,7 @@ import { useSettingsStore } from '$lib/stores/settingsStore'
 
 const router = useRouter()
 const { t, locale } = useI18n()
+const { isMobile } = useMobile()
 const commandOpen = ref(false)
 const clipboardStore = useClipboardStore()
 const settingsStore = useSettingsStore()
@@ -95,7 +98,8 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="h-screen flex bg-background text-foreground overflow-hidden">
+  <!-- Desktop layout -->
+  <div v-if="!isMobile" class="h-screen flex bg-background text-foreground overflow-hidden">
     <div data-tauri-drag-region class="fixed top-0 left-0 right-0 h-9 z-40 bg-background" />
     <Sidebar class="pt-9" @command="commandOpen = true" />
     <main class="flex-1 overflow-y-auto pt-9">
@@ -106,5 +110,16 @@ onBeforeUnmount(() => {
       </RouterView>
     </main>
   </div>
+
+  <!-- Mobile layout -->
+  <div v-if="isMobile" class="h-screen flex flex-col bg-background text-foreground overflow-hidden">
+    <main class="flex-1 overflow-y-auto">
+      <RouterView v-slot="{ Component }">
+        <component :is="Component" />
+      </RouterView>
+    </main>
+    <MobileTabBar />
+  </div>
+
   <CommandPalette :open="commandOpen" :commands="commands" @close="commandOpen = false" @execute="command => command.action()" />
 </template>
