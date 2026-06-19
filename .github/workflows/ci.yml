@@ -100,6 +100,6 @@ jobs:
       - run: pnpm install
 
       - name: Build Android (debug)
-        run: pnpm exec tauri android build --target aarch64
+        run: pnpm exec tauri android build --debug --target aarch64
         env:
           NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/27.0.12077973

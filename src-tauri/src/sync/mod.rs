@@ -7,7 +7,7 @@ use std::cell::Cell;
 // Set this to `true` while applying remote sync changes to avoid
 // creating changelog entries for server-originated mutations.
 thread_local! {
-    static SYNC_APPLYING: Cell<bool> = Cell::new(false);
+    static SYNC_APPLYING: Cell<bool> = const { Cell::new(false) };
 }
 
 /// Run a closure with sync tracking disabled.
