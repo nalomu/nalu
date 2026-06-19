@@ -467,55 +467,55 @@ fn register_clipboard_shortcut(app: tauri::AppHandle, shortcut: String) -> Resul
 
     #[cfg(desktop)]
     {
-    // Unregister previous shortcut if any
-    if let Some(old) = CURRENT_SHORTCUT.lock().ok().and_then(|g| g.clone())
-        && let Ok(old_parsed) = parse_shortcut(&old)
-    {
-        let _ = app.global_shortcut().unregister(old_parsed);
-    }
+        // Unregister previous shortcut if any
+        if let Some(old) = CURRENT_SHORTCUT.lock().ok().and_then(|g| g.clone())
+            && let Ok(old_parsed) = parse_shortcut(&old)
+        {
+            let _ = app.global_shortcut().unregister(old_parsed);
+        }
 
-    let parsed = parse_shortcut(&shortcut)?;
+        let parsed = parse_shortcut(&shortcut)?;
 
-    // Block dangerous system shortcuts
-    let lower = shortcut.to_lowercase();
-    let dangerous = [
-        "cmd+q",
-        "cmd+w",
-        "cmd+h",
-        "cmd+m",
-        "cmd+tab",
-        "cmdorctrl+q",
-        "cmdorctrl+w",
-        "cmdorctrl+h",
-        "cmdorctrl+m",
-        "meta+q",
-        "meta+w",
-        "meta+h",
-        "meta+m",
-        "super+q",
-    ];
-    if dangerous
-        .iter()
-        .any(|d| lower.replace(' ', "") == d.replace(' ', ""))
-    {
-        return Err(format!(
-            "shortcut '{}' conflicts with system shortcuts",
-            shortcut
-        ));
-    }
-    app.global_shortcut()
-        .on_shortcut(parsed, move |app, _shortcut, event| {
-            if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
-                toggle_popup_window(app);
-            }
-        })
-        .map_err(|e| format!("failed to register shortcut: {e}"))?;
+        // Block dangerous system shortcuts
+        let lower = shortcut.to_lowercase();
+        let dangerous = [
+            "cmd+q",
+            "cmd+w",
+            "cmd+h",
+            "cmd+m",
+            "cmd+tab",
+            "cmdorctrl+q",
+            "cmdorctrl+w",
+            "cmdorctrl+h",
+            "cmdorctrl+m",
+            "meta+q",
+            "meta+w",
+            "meta+h",
+            "meta+m",
+            "super+q",
+        ];
+        if dangerous
+            .iter()
+            .any(|d| lower.replace(' ', "") == d.replace(' ', ""))
+        {
+            return Err(format!(
+                "shortcut '{}' conflicts with system shortcuts",
+                shortcut
+            ));
+        }
+        app.global_shortcut()
+            .on_shortcut(parsed, move |app, _shortcut, event| {
+                if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
+                    toggle_popup_window(app);
+                }
+            })
+            .map_err(|e| format!("failed to register shortcut: {e}"))?;
 
-    if let Ok(mut g) = CURRENT_SHORTCUT.lock() {
-        *g = Some(shortcut.clone());
-    }
-    tracing::info!("[register_clipboard_shortcut] registered: {}", shortcut);
-    Ok(())
+        if let Ok(mut g) = CURRENT_SHORTCUT.lock() {
+            *g = Some(shortcut.clone());
+        }
+        tracing::info!("[register_clipboard_shortcut] registered: {}", shortcut);
+        Ok(())
     }
 }
 
@@ -530,18 +530,18 @@ fn unregister_clipboard_shortcut(app: tauri::AppHandle) -> Result<(), String> {
 
     #[cfg(desktop)]
     {
-    if let Some(old) = CURRENT_SHORTCUT.lock().ok().and_then(|g| g.clone()) {
-        if let Ok(parsed) = parse_shortcut(&old) {
-            app.global_shortcut()
-                .unregister(parsed)
-                .map_err(|e| format!("failed to unregister: {e}"))?;
+        if let Some(old) = CURRENT_SHORTCUT.lock().ok().and_then(|g| g.clone()) {
+            if let Ok(parsed) = parse_shortcut(&old) {
+                app.global_shortcut()
+                    .unregister(parsed)
+                    .map_err(|e| format!("failed to unregister: {e}"))?;
+            }
+            if let Ok(mut g) = CURRENT_SHORTCUT.lock() {
+                *g = None;
+            }
         }
-        if let Ok(mut g) = CURRENT_SHORTCUT.lock() {
-            *g = None;
-        }
-    }
-    tracing::info!("[unregister_clipboard_shortcut] done");
-    Ok(())
+        tracing::info!("[unregister_clipboard_shortcut] done");
+        Ok(())
     }
 }
 
@@ -743,45 +743,45 @@ fn update_tray_menu(
 
     #[cfg(desktop)]
     {
-    let label = |key: &str, fallback: &str| -> String {
-        labels
-            .get(key)
-            .cloned()
-            .unwrap_or_else(|| fallback.to_string())
-    };
+        let label = |key: &str, fallback: &str| -> String {
+            labels
+                .get(key)
+                .cloned()
+                .unwrap_or_else(|| fallback.to_string())
+        };
 
-    let menu = tauri::menu::MenuBuilder::new(&app)
-        .text("show_main", label("open", "Open Nalu"))
-        .separator()
-        .text("nav_dashboard", label("dashboard", "Dashboard"))
-        .text("nav_tasks", label("tasks", "Tasks"))
-        .text("nav_notes", label("notes", "Notes"))
-        .text("nav_clipboard", label("clipboard", "Clipboard"))
-        .text("nav_pomodoro", label("pomodoro", "Pomodoro"))
-        .text("nav_schedule", label("schedule", "Schedule"))
-        .text("nav_alarm", label("alarm", "Alarm"))
-        .text("nav_ai", label("ai", "AI Assistant"))
-        .text("nav_mysql", label("mysql", "MySQL"))
-        .separator()
-        .text("toggle_popup", label("clipboardPopup", "Clipboard Popup"))
-        .text("nav_settings", label("settings", "Settings"))
-        .separator()
-        .text("quit_app", label("quit", "Quit"))
-        .build()
-        .map_err(|e| format!("build tray menu failed: {e}"))?;
+        let menu = tauri::menu::MenuBuilder::new(&app)
+            .text("show_main", label("open", "Open Nalu"))
+            .separator()
+            .text("nav_dashboard", label("dashboard", "Dashboard"))
+            .text("nav_tasks", label("tasks", "Tasks"))
+            .text("nav_notes", label("notes", "Notes"))
+            .text("nav_clipboard", label("clipboard", "Clipboard"))
+            .text("nav_pomodoro", label("pomodoro", "Pomodoro"))
+            .text("nav_schedule", label("schedule", "Schedule"))
+            .text("nav_alarm", label("alarm", "Alarm"))
+            .text("nav_ai", label("ai", "AI Assistant"))
+            .text("nav_mysql", label("mysql", "MySQL"))
+            .separator()
+            .text("toggle_popup", label("clipboardPopup", "Clipboard Popup"))
+            .text("nav_settings", label("settings", "Settings"))
+            .separator()
+            .text("quit_app", label("quit", "Quit"))
+            .build()
+            .map_err(|e| format!("build tray menu failed: {e}"))?;
 
-    if let Some(tray) = app.tray_by_id("main-tray") {
-        tray.set_menu(Some(menu))
-            .map_err(|e| format!("set tray menu failed: {e}"))?;
-        tracing::info!(
-            "[update_tray_menu] tray menu updated with {} labels",
-            labels.len()
-        );
-    } else {
-        return Err("tray icon 'main-tray' not found".to_string());
-    }
+        if let Some(tray) = app.tray_by_id("main-tray") {
+            tray.set_menu(Some(menu))
+                .map_err(|e| format!("set tray menu failed: {e}"))?;
+            tracing::info!(
+                "[update_tray_menu] tray menu updated with {} labels",
+                labels.len()
+            );
+        } else {
+            return Err("tray icon 'main-tray' not found".to_string());
+        }
 
-    Ok(())
+        Ok(())
     }
 }
 
@@ -981,64 +981,64 @@ pub fn run() {
             // --- Tray icon: click to show main window ---
             #[cfg(desktop)]
             {
-            let tray_menu = tauri::menu::MenuBuilder::new(app)
-                .text("show_main", "Open Nalu")
-                .separator()
-                .text("nav_dashboard", "Dashboard")
-                .text("nav_tasks", "Tasks")
-                .text("nav_notes", "Notes")
-                .text("nav_clipboard", "Clipboard")
-                .text("nav_pomodoro", "Pomodoro")
-                .text("nav_schedule", "Schedule")
-                .text("nav_alarm", "Alarm")
-                .text("nav_ai", "AI Assistant")
-                .text("nav_mysql", "MySQL")
-                .separator()
-                .text("toggle_popup", "Clipboard Popup")
-                .text("nav_settings", "Settings")
-                .separator()
-                .text("quit_app", "Quit")
-                .build()?;
+                let tray_menu = tauri::menu::MenuBuilder::new(app)
+                    .text("show_main", "Open Nalu")
+                    .separator()
+                    .text("nav_dashboard", "Dashboard")
+                    .text("nav_tasks", "Tasks")
+                    .text("nav_notes", "Notes")
+                    .text("nav_clipboard", "Clipboard")
+                    .text("nav_pomodoro", "Pomodoro")
+                    .text("nav_schedule", "Schedule")
+                    .text("nav_alarm", "Alarm")
+                    .text("nav_ai", "AI Assistant")
+                    .text("nav_mysql", "MySQL")
+                    .separator()
+                    .text("toggle_popup", "Clipboard Popup")
+                    .text("nav_settings", "Settings")
+                    .separator()
+                    .text("quit_app", "Quit")
+                    .build()?;
 
-            let tray_icon = tauri::include_image!("icons/tray-icon.png");
-            let _tray = tauri::tray::TrayIconBuilder::with_id("main-tray")
-                .icon(tray_icon)
-                .icon_as_template(true)
-                .menu(&tray_menu)
-                .on_menu_event(move |app, event| match event.id().as_ref() {
-                    "show_main" => show_main_window(app),
-                    "nav_dashboard" => show_and_navigate(app, "/"),
-                    "nav_tasks" => show_and_navigate(app, "/tasks"),
-                    "nav_notes" => show_and_navigate(app, "/notes"),
-                    "nav_clipboard" => show_and_navigate(app, "/clipboard"),
-                    "nav_pomodoro" => show_and_navigate(app, "/pomodoro"),
-                    "nav_schedule" => show_and_navigate(app, "/schedule"),
-                    "nav_alarm" => show_and_navigate(app, "/alarm"),
-                    "nav_ai" => show_and_navigate(app, "/ai"),
-                    "nav_mysql" => show_and_navigate(app, "/mysql"),
-                    "nav_settings" => show_and_navigate(app, "/settings"),
-                    "toggle_popup" => toggle_popup_window(app),
-                    "quit_app" => {
-                        tracing::info!("[Tray] Quit requested");
-                        app.exit(0);
-                    }
-                    _ => {}
-                })
-                .on_tray_icon_event(|tray, event| {
-                    // Single click or left-click on tray icon → show main window
-                    if let tauri::tray::TrayIconEvent::Click { .. } = event {
-                        let app = tray.app_handle();
-                        show_main_window(app);
-                    }
-                })
-                .build(app)?;
+                let tray_icon = tauri::include_image!("icons/tray-icon.png");
+                let _tray = tauri::tray::TrayIconBuilder::with_id("main-tray")
+                    .icon(tray_icon)
+                    .icon_as_template(true)
+                    .menu(&tray_menu)
+                    .on_menu_event(move |app, event| match event.id().as_ref() {
+                        "show_main" => show_main_window(app),
+                        "nav_dashboard" => show_and_navigate(app, "/"),
+                        "nav_tasks" => show_and_navigate(app, "/tasks"),
+                        "nav_notes" => show_and_navigate(app, "/notes"),
+                        "nav_clipboard" => show_and_navigate(app, "/clipboard"),
+                        "nav_pomodoro" => show_and_navigate(app, "/pomodoro"),
+                        "nav_schedule" => show_and_navigate(app, "/schedule"),
+                        "nav_alarm" => show_and_navigate(app, "/alarm"),
+                        "nav_ai" => show_and_navigate(app, "/ai"),
+                        "nav_mysql" => show_and_navigate(app, "/mysql"),
+                        "nav_settings" => show_and_navigate(app, "/settings"),
+                        "toggle_popup" => toggle_popup_window(app),
+                        "quit_app" => {
+                            tracing::info!("[Tray] Quit requested");
+                            app.exit(0);
+                        }
+                        _ => {}
+                    })
+                    .on_tray_icon_event(|tray, event| {
+                        // Single click or left-click on tray icon → show main window
+                        if let tauri::tray::TrayIconEvent::Click { .. } = event {
+                            let app = tray.app_handle();
+                            show_main_window(app);
+                        }
+                    })
+                    .build(app)?;
 
-            tracing::info!("[Setup] Tray icon with menu configured");
+                tracing::info!("[Setup] Tray icon with menu configured");
 
-            // --- Global shortcuts ---
-            // Shortcut registration is now driven by the frontend via commands.
-            // On startup the frontend will call register_clipboard_shortcut if enabled.
-            tracing::info!("[Setup] Global shortcut registration deferred to frontend");
+                // --- Global shortcuts ---
+                // Shortcut registration is now driven by the frontend via commands.
+                // On startup the frontend will call register_clipboard_shortcut if enabled.
+                tracing::info!("[Setup] Global shortcut registration deferred to frontend");
             }
 
             // --- Background alarm checker (runs in Rust, immune to WebView throttling) ---

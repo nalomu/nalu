@@ -1,6 +1,6 @@
 use nalu_shared::{
     device::PairingRequest,
-    sync_protocol::{SyncAck, SyncPullRequest, SyncPushRequest, SYNC_TABLES},
+    sync_protocol::{SYNC_TABLES, SyncAck, SyncPullRequest, SyncPushRequest},
 };
 
 use super::changelog;
@@ -33,10 +33,17 @@ impl SyncConfig {
 }
 
 /// Pair with the server: send pairing code, get back JWT token and device_id.
-pub async fn pair(server_url: &str, pairing_code: &str, device_name: &str) -> Result<SyncConfig, String> {
+pub async fn pair(
+    server_url: &str,
+    pairing_code: &str,
+    device_name: &str,
+) -> Result<SyncConfig, String> {
     let client = reqwest::Client::new();
     let resp = client
-        .post(format!("{}/api/auth/pair", server_url.trim_end_matches('/')))
+        .post(format!(
+            "{}/api/auth/pair",
+            server_url.trim_end_matches('/')
+        ))
         .json(&PairingRequest {
             pairing_code: pairing_code.to_string(),
             device_name: device_name.to_string(),
@@ -213,7 +220,10 @@ fn apply_remote_payload(table_name: &str, row_id: &str, payload: &str) -> Result
     // Check if row exists
     let exists: bool = conn
         .query_row(
-            &format!("SELECT COUNT(*) FROM {} WHERE {} = ?1", table_name, key_column),
+            &format!(
+                "SELECT COUNT(*) FROM {} WHERE {} = ?1",
+                table_name, key_column
+            ),
             rusqlite::params![row_id],
             |row| row.get::<_, i64>(0),
         )
@@ -234,22 +244,26 @@ fn apply_remote_payload(table_name: &str, row_id: &str, payload: &str) -> Result
         }
         if !sets.is_empty() {
             let sets_str = sets.join(", ");
-            let sql = format!("UPDATE {} SET {} WHERE {} = ?", table_name, sets_str, key_column);
+            let sql = format!(
+                "UPDATE {} SET {} WHERE {} = ?",
+                table_name, sets_str, key_column
+            );
             params.push(Box::new(row_id.to_string()));
-            let refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|v| v.as_ref()).collect();
+            let refs: Vec<&dyn rusqlite::types::ToSql> =
+                params.iter().map(|v| v.as_ref()).collect();
             conn.execute(&sql, rusqlite::params_from_iter(refs.iter()))
                 .map_err(|e| e.to_string())?;
         }
     } else {
         // INSERT
         let mut cols = Vec::new();
-            let mut placeholders = Vec::new();
-            let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
-            for (key, value) in &fields {
-                validate_identifier(key)?;
-                cols.push(key.clone());
-                placeholders.push("?".to_string());
-                params.push(value_to_sql(value));
+        let mut placeholders = Vec::new();
+        let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+        for (key, value) in &fields {
+            validate_identifier(key)?;
+            cols.push(key.clone());
+            placeholders.push("?".to_string());
+            params.push(value_to_sql(value));
         }
         if !cols.is_empty() {
             let sql = format!(
@@ -258,7 +272,8 @@ fn apply_remote_payload(table_name: &str, row_id: &str, payload: &str) -> Result
                 cols.join(", "),
                 placeholders.join(", ")
             );
-            let refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|v| v.as_ref()).collect();
+            let refs: Vec<&dyn rusqlite::types::ToSql> =
+                params.iter().map(|v| v.as_ref()).collect();
             conn.execute(&sql, rusqlite::params_from_iter(refs.iter()))
                 .map_err(|e| e.to_string())?;
         }

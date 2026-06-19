@@ -1,6 +1,8 @@
 use crate::db::database::get_connection;
 use crate::sync::changelog;
-use nalu_shared::models::{ColumnSnapshot, ColumnWithTasks, GroupData, Task, TaskColumn, TaskSnapshot};
+use nalu_shared::models::{
+    ColumnSnapshot, ColumnWithTasks, GroupData, Task, TaskColumn, TaskSnapshot,
+};
 use nalu_shared::sync_protocol::{OP_DELETE, OP_INSERT, OP_UPDATE};
 
 fn create_default_columns_for_project(
@@ -130,7 +132,13 @@ pub fn add_task(title: String, project: Option<String>) -> Result<Task, String> 
         created_at: chrono::Utc::now().to_rfc3339(),
         updated_at: chrono::Utc::now().to_rfc3339(),
     };
-    changelog::record_change(conn, "tasks", &task.id, OP_INSERT, &serde_json::to_string(&task).unwrap_or_default())?;
+    changelog::record_change(
+        conn,
+        "tasks",
+        &task.id,
+        OP_INSERT,
+        &serde_json::to_string(&task).unwrap_or_default(),
+    )?;
     Ok(task)
 }
 
@@ -158,7 +166,13 @@ pub fn toggle_task(id: String) -> Result<bool, String> {
         "SELECT id, project, title, done, COALESCE(progress,0), COALESCE(column_id,''), COALESCE(position,0), created_at, updated_at FROM tasks WHERE id = ?1",
         rusqlite::params![id], task_from_row,
     ).map_err(|e| e.to_string())?;
-    changelog::record_change(conn, "tasks", &task.id, OP_UPDATE, &serde_json::to_string(&task).unwrap_or_default())?;
+    changelog::record_change(
+        conn,
+        "tasks",
+        &task.id,
+        OP_UPDATE,
+        &serde_json::to_string(&task).unwrap_or_default(),
+    )?;
 
     Ok(done)
 }
@@ -179,7 +193,13 @@ pub fn update_task(id: String, title: String) -> Result<Task, String> {
         task_from_row,
     )
     .map_err(|e| e.to_string())?;
-    changelog::record_change(conn, "tasks", &task.id, OP_UPDATE, &serde_json::to_string(&task).unwrap_or_default())?;
+    changelog::record_change(
+        conn,
+        "tasks",
+        &task.id,
+        OP_UPDATE,
+        &serde_json::to_string(&task).unwrap_or_default(),
+    )?;
     Ok(task)
 }
 
@@ -493,7 +513,13 @@ pub fn copy_task_group(project: String) -> Result<GroupData, String> {
 
         record_column_change(&tx, &copied_column, OP_INSERT)?;
         for task in &copied_tasks {
-            changelog::record_change(&tx, "tasks", &task.id, OP_INSERT, &serde_json::to_string(task).unwrap_or_default())?;
+            changelog::record_change(
+                &tx,
+                "tasks",
+                &task.id,
+                OP_INSERT,
+                &serde_json::to_string(task).unwrap_or_default(),
+            )?;
         }
 
         copied_columns.push(ColumnWithTasks {
@@ -576,7 +602,13 @@ pub fn rename_task_group(project: String, name: String) -> Result<GroupData, Str
                 .collect()
         };
         for task in &renamed_tasks {
-            changelog::record_change(&tx, "tasks", &task.id, OP_UPDATE, &serde_json::to_string(task).unwrap_or_default())?;
+            changelog::record_change(
+                &tx,
+                "tasks",
+                &task.id,
+                OP_UPDATE,
+                &serde_json::to_string(task).unwrap_or_default(),
+            )?;
         }
 
         tx.commit().map_err(|e| e.to_string())?
@@ -654,7 +686,13 @@ pub fn add_task_to_column(title: String, column_id: String) -> Result<Task, Stri
         created_at: chrono::Utc::now().to_rfc3339(),
         updated_at: chrono::Utc::now().to_rfc3339(),
     };
-    changelog::record_change(conn, "tasks", &task.id, OP_INSERT, &serde_json::to_string(&task).unwrap_or_default())?;
+    changelog::record_change(
+        conn,
+        "tasks",
+        &task.id,
+        OP_INSERT,
+        &serde_json::to_string(&task).unwrap_or_default(),
+    )?;
     Ok(task)
 }
 
@@ -675,7 +713,13 @@ pub fn update_task_content(id: String, title: String) -> Result<Task, String> {
         task_from_row,
     )
     .map_err(|e| e.to_string())?;
-    changelog::record_change(conn, "tasks", &task.id, OP_UPDATE, &serde_json::to_string(&task).unwrap_or_default())?;
+    changelog::record_change(
+        conn,
+        "tasks",
+        &task.id,
+        OP_UPDATE,
+        &serde_json::to_string(&task).unwrap_or_default(),
+    )?;
     Ok(task)
 }
 
@@ -699,7 +743,13 @@ pub fn update_task_progress(id: String, progress: i32) -> Result<Task, String> {
         task_from_row,
     )
     .map_err(|e| e.to_string())?;
-    changelog::record_change(conn, "tasks", &task.id, OP_UPDATE, &serde_json::to_string(&task).unwrap_or_default())?;
+    changelog::record_change(
+        conn,
+        "tasks",
+        &task.id,
+        OP_UPDATE,
+        &serde_json::to_string(&task).unwrap_or_default(),
+    )?;
     Ok(task)
 }
 
@@ -736,7 +786,13 @@ pub fn restore_task(snapshot: TaskSnapshot) -> Result<Task, String> {
         rusqlite::params![t.id, t.project, t.title, t.done, t.progress, t.column_id, t.position, t.created_at, t.updated_at],
     )
     .map_err(|e| e.to_string())?;
-    changelog::record_change(conn, "tasks", &t.id, OP_INSERT, &serde_json::to_string(t).unwrap_or_default())?;
+    changelog::record_change(
+        conn,
+        "tasks",
+        &t.id,
+        OP_INSERT,
+        &serde_json::to_string(t).unwrap_or_default(),
+    )?;
     Ok(snapshot.task)
 }
 
@@ -1107,7 +1163,10 @@ fn record_column_change(
     changelog::record_change(conn, "task_columns", &column.id, operation, &payload)
 }
 
-fn record_tasks_for_columns(conn: &rusqlite::Connection, column_ids: &[&str]) -> Result<(), String> {
+fn record_tasks_for_columns(
+    conn: &rusqlite::Connection,
+    column_ids: &[&str],
+) -> Result<(), String> {
     let mut seen = std::collections::HashSet::new();
     for column_id in column_ids {
         if !seen.insert((*column_id).to_string()) {
