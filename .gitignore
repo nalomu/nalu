@@ -13,6 +13,10 @@ vite.config.ts.timestamp-*
 test-results/
 target/
 
+# Android signing keys (generated locally, CI uses secrets)
+*.keystore
+*.jks
+
 docs/.vuepress/dist/
 docs/.vuepress/.cache/
 docs/.vuepress/.temp/
