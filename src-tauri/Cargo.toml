@@ -40,14 +40,14 @@ tokio = { version = "1", features = ["full"] }
 # SQLite (bundled = no system sqlite needed)
 rusqlite = { version = "0.34", features = ["bundled"] }
 
-# MySQL async client
-mysql_async = "0.34"
+# MySQL async client. Use rustls so Android builds do not need OpenSSL cross-compilation.
+mysql_async = { version = "0.34", default-features = false, features = ["default-rustls"] }
 
 # Date/time
 chrono = { version = "0.4", features = ["serde"] }
 
-# HTTP client (for cloud AI API calls)
-reqwest = { version = "0.12", features = ["json"] }
+# HTTP client (for cloud AI API calls). Use rustls so Android builds do not need OpenSSL cross-compilation.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 
 # Logging
 tracing = "0.1"
@@ -57,11 +57,13 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1", features = ["v4"] }
 
 # Image / clipboard
-arboard = "3"
 base64 = "0.22"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
 
 # macOS CGEvent for keyboard simulation (paste via Cmd+V)
+[target.'cfg(not(target_os = "android"))'.dependencies]
+arboard = "3"
+
 [target.'cfg(target_os = "macos")'.dependencies]
 core-graphics = "0.24"
 objc2 = "0.6"

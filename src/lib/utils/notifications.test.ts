@@ -13,6 +13,7 @@ vi.mock("@tauri-apps/api/event", () => ({
     eventHandlers[event].push(handler);
     return Promise.resolve(() => {});
   }),
+  emit: vi.fn(() => Promise.resolve()),
 }));
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -24,16 +25,20 @@ vi.mock("@tauri-apps/plugin-notification", () => ({
 }));
 
 vi.mock("$lib/utils/alertSound", () => ({
+  ALERT_AUDIO_STOP_EVENT: "alert-audio-stop",
   playAlertChime: vi.fn(),
   startLoopingAlert: vi.fn(),
-  stopLoopingAlert: vi.fn(),
+  stopAllAlertAudio: vi.fn(),
 }));
 
 vi.mock("$lib/stores/settingsStore", () => ({
   useSettingsStore: () => ({
     soundSettings: {
+      pomodoroStart: { type: "preset", id: "gentle-bell" },
+      pomodoroEnd: { type: "preset", id: "soft-rise" },
       pomodoro: { type: "preset", id: "gentle-bell" },
       alarm: { type: "preset", id: "warm-chime" },
+      volume: 0.65,
     },
   }),
 }));
@@ -47,8 +52,8 @@ vi.mock("$lib/stores/alertStore", () => ({
 const { initGlobalNotifications } = await import("$lib/utils/notifications");
 const { invoke } = await import("@tauri-apps/api/core");
 const { sendNotification } = await import("@tauri-apps/plugin-notification");
-const { playAlertChime, startLoopingAlert } = await import("$lib/utils/alertSound");
-const { showAlert } = await import("$lib/stores/alertStore");
+const { playAlertChime, startLoopingAlert, stopAllAlertAudio } = await import("$lib/utils/alertSound");
+const { showAlert, dismissAlert } = await import("$lib/stores/alertStore");
 
 describe("notifications", () => {
   it("registers event listeners on first init", async () => {
@@ -77,6 +82,7 @@ describe("notifications", () => {
       expect.objectContaining({ title: "番茄钟" })
     );
     expect(playAlertChime).toHaveBeenCalled();
+    expect(playAlertChime).toHaveBeenCalledWith({ type: "preset", id: "soft-rise" }, 0.65);
     expect(showAlert).toHaveBeenCalledWith(
       expect.objectContaining({ body: expect.stringContaining("工作") })
     );
@@ -113,6 +119,7 @@ describe("notifications", () => {
   it("alarm-triggered fires alarm with looping sound + snooze", () => {
     vi.mocked(sendNotification).mockClear();
     vi.mocked(startLoopingAlert).mockClear();
+    vi.mocked(stopAllAlertAudio).mockClear();
     vi.mocked(showAlert).mockClear();
 
     const alarmPayload = {
@@ -130,6 +137,8 @@ describe("notifications", () => {
       expect.objectContaining({ title: "闹钟响了！" })
     );
     expect(startLoopingAlert).toHaveBeenCalled();
+    expect(startLoopingAlert).toHaveBeenCalledWith({ type: "preset", id: "warm-chime" }, 0.65);
+    expect(stopAllAlertAudio).toHaveBeenCalledWith("alarm-start");
     expect(showAlert).toHaveBeenCalledWith(
       expect.objectContaining({
         title: "⏰ 闹钟响了！",
@@ -138,6 +147,74 @@ describe("notifications", () => {
         snoozeText: "稍后提醒",
       })
     );
+  });
+
+  it("alarm-triggered prefers per-alarm sound over the global alarm sound", () => {
+    vi.mocked(startLoopingAlert).mockClear();
+    vi.mocked(showAlert).mockClear();
+
+    eventHandlers["alarm-triggered"]?.forEach((h) =>
+      h({
+        payload: {
+          id: "custom-sound-test",
+          time: "08:00",
+          label: "起床",
+          repeat: "daily",
+          active: true,
+          sound: JSON.stringify({ type: "preset", id: "soft-rise" }),
+          created_at: "2026-01-01",
+        },
+      })
+    );
+
+    expect(startLoopingAlert).toHaveBeenCalledWith({ type: "preset", id: "soft-rise" }, 0.65);
+  });
+
+  it("alarm dismiss stops alert audio globally", () => {
+    vi.mocked(stopAllAlertAudio).mockClear();
+    vi.mocked(showAlert).mockClear();
+
+    eventHandlers["alarm-triggered"]?.forEach((h) =>
+      h({ payload: { id: "dismiss-test", time: "08:00", label: "起床", repeat: "daily", active: true, created_at: "" } })
+    );
+
+    const alertConfig = vi.mocked(showAlert).mock.calls.at(-1)?.[0];
+    alertConfig?.onDismiss?.();
+
+    expect(stopAllAlertAudio).toHaveBeenCalledWith("alarm-dismiss");
+  });
+
+  it("alarm snooze stops alert audio globally before scheduling the retry", () => {
+    vi.useFakeTimers();
+    vi.mocked(stopAllAlertAudio).mockClear();
+    vi.mocked(showAlert).mockClear();
+
+    eventHandlers["alarm-triggered"]?.forEach((h) =>
+      h({ payload: { id: "snooze-test", time: "08:00", label: "起床", repeat: "daily", active: true, created_at: "" } })
+    );
+
+    const alertConfig = vi.mocked(showAlert).mock.calls.at(-1)?.[0];
+    alertConfig?.onSnooze?.();
+
+    expect(stopAllAlertAudio).toHaveBeenCalledWith("alarm-snooze");
+    expect(dismissAlert).toHaveBeenCalled();
+    vi.useRealTimers();
+  });
+
+  it("global audio stop event from alarm start does not dismiss the new alert", () => {
+    vi.mocked(dismissAlert).mockClear();
+
+    eventHandlers["alert-audio-stop"]?.forEach((h) => h({ payload: { reason: "alarm-start" } }));
+
+    expect(dismissAlert).not.toHaveBeenCalled();
+  });
+
+  it("global audio stop event clears ringing alarm UI state on dismiss", () => {
+    vi.mocked(dismissAlert).mockClear();
+
+    eventHandlers["alert-audio-stop"]?.forEach((h) => h({ payload: { reason: "alarm-dismiss" } }));
+
+    expect(dismissAlert).toHaveBeenCalled();
   });
 
   it("alarm without label uses default body text", () => {

@@ -4,6 +4,11 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
+vi.mock("@tauri-apps/api/event", () => ({
+  emit: vi.fn(() => Promise.resolve()),
+  listen: vi.fn(() => Promise.resolve(() => {})),
+}));
+
 // ── Web Audio API Mock ────────────────────────────────────
 class MockOscillatorNode {
   type = "sine";

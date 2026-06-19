@@ -15,6 +15,8 @@
     "test:watch": "vitest",
     "test:e2e": "playwright test",
     "test:all": "pnpm test && cd src-tauri && cargo test --lib && cd .. && pnpm test:e2e",
+    "docs:dev": "vuepress dev docs",
+    "docs:build": "vuepress build docs",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build"
   },
@@ -54,10 +56,13 @@
     "@testing-library/vue": "^8.1.0",
     "@types/node": "^25.9.2",
     "@vitejs/plugin-vue": "^5.2.1",
+    "@vuepress/bundler-vite": "2.0.0-rc.2",
+    "@vuepress/theme-default": "2.0.0-rc.2",
     "jsdom": "^29.1.1",
     "typescript": "~5.6.2",
     "vite": "^6.0.3",
     "vitest": "^4.1.8",
-    "vue-tsc": "^2.2.0"
+    "vue-tsc": "^2.2.0",
+    "vuepress": "2.0.0-rc.2"
   }
 }

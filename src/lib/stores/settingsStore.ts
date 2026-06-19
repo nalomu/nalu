@@ -26,8 +26,11 @@ export type SoundChoice =
   | { type: "synth" };
 
 export interface SoundSettings {
+  pomodoroStart: SoundChoice;
+  pomodoroEnd: SoundChoice;
   pomodoro: SoundChoice;
   alarm: SoundChoice;
+  volume: number;
 }
 
 const defaultAiConfig: AiConfig = {
@@ -47,8 +50,11 @@ const defaultClipboardRetention: ClipboardRetention = {
 };
 
 const defaultSoundSettings: SoundSettings = {
+  pomodoroStart: { type: "preset", id: "gentle-bell" },
+  pomodoroEnd: { type: "preset", id: "soft-rise" },
   pomodoro: { type: "preset", id: "gentle-bell" },
   alarm: { type: "preset", id: "warm-chime" },
+  volume: 0.8,
 };
 
 export const useSettingsStore = defineStore("settings", () => {
@@ -76,7 +82,14 @@ export const useSettingsStore = defineStore("settings", () => {
   const savedSoundSettings = localStorage.getItem("nalu-sound-settings");
   if (savedSoundSettings) {
     try {
-      soundSettings.value = { ...defaultSoundSettings, ...JSON.parse(savedSoundSettings) };
+      const parsed = JSON.parse(savedSoundSettings);
+      soundSettings.value = {
+        ...defaultSoundSettings,
+        ...parsed,
+        pomodoroStart: parsed.pomodoroStart ?? parsed.pomodoro ?? defaultSoundSettings.pomodoroStart,
+        pomodoroEnd: parsed.pomodoroEnd ?? parsed.pomodoro ?? defaultSoundSettings.pomodoroEnd,
+        volume: Math.min(1, Math.max(0, Number(parsed.volume ?? defaultSoundSettings.volume))),
+      };
     } catch {}
   }
 

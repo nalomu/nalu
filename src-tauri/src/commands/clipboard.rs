@@ -1,10 +1,16 @@
 use crate::db::database::get_connection;
 use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
+#[cfg(not(target_os = "android"))]
 use std::borrow::Cow;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
+#[cfg(target_os = "macos")]
+use std::process::{Command, Output};
+#[cfg(target_os = "macos")]
 use std::sync::Mutex;
+#[cfg(target_os = "macos")]
+use std::time::{Duration, Instant};
 use tauri::Manager;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -21,6 +27,7 @@ pub struct ClipboardFileReference {
     pub is_image: bool,
 }
 
+#[cfg(target_os = "macos")]
 static LAST_NATIVE_FILE_REFS_LOG_KEY: Mutex<Option<String>> = Mutex::new(None);
 
 #[tauri::command]
@@ -157,8 +164,10 @@ pub fn clear_clipboard_history() -> Result<usize, String> {
 }
 
 #[tauri::command]
-pub fn read_clipboard_file_references() -> Result<Vec<ClipboardFileReference>, String> {
-    read_clipboard_file_references_impl()
+pub async fn read_clipboard_file_references() -> Result<Vec<ClipboardFileReference>, String> {
+    tauri::async_runtime::spawn_blocking(read_clipboard_file_references_impl)
+        .await
+        .map_err(|e| format!("read clipboard file references task failed: {e}"))?
 }
 
 #[cfg(target_os = "macos")]
@@ -189,10 +198,7 @@ set AppleScript's text item delimiters to linefeed
 return output as text
 "#;
 
-    let out = std::process::Command::new("osascript")
-        .arg("-e")
-        .arg(script)
-        .output()
+    let out = run_osascript_with_timeout(script, Duration::from_millis(1500))
         .map_err(|e| format!("osascript read file references failed: {e}"))?;
 
     if !out.status.success() {
@@ -238,6 +244,7 @@ return output as text
     Ok(refs)
 }
 
+#[cfg(target_os = "macos")]
 fn should_log_native_file_refs(refs: &[ClipboardFileReference]) -> bool {
     let key = refs
         .iter()
@@ -342,6 +349,7 @@ pub fn write_clipboard_entry_to_system(
     }
 }
 
+#[cfg(not(target_os = "android"))]
 fn write_text_to_clipboard(text: &str) -> Result<(), String> {
     let mut clipboard =
         arboard::Clipboard::new().map_err(|e| format!("clipboard init failed: {e}"))?;
@@ -357,6 +365,12 @@ fn write_text_to_clipboard(text: &str) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(target_os = "android")]
+fn write_text_to_clipboard(_text: &str) -> Result<(), String> {
+    Err("system clipboard write is not supported on Android yet".to_string())
+}
+
+#[cfg(not(target_os = "android"))]
 fn write_image_content_to_clipboard(content: &str) -> Result<(), String> {
     let bytes = read_image_bytes_from_content(content)?;
     let image = image::load_from_memory(&bytes)
@@ -393,6 +407,11 @@ fn write_image_content_to_clipboard(content: &str) -> Result<(), String> {
     );
 
     Ok(())
+}
+
+#[cfg(target_os = "android")]
+fn write_image_content_to_clipboard(_content: &str) -> Result<(), String> {
+    Err("system clipboard image write is not supported on Android yet".to_string())
 }
 
 fn find_duplicate_entry(
@@ -542,10 +561,7 @@ fn write_file_reference_to_clipboard(content: &str, content_type: &str) -> Resul
         format!("set the clipboard to {{{}}}", items)
     };
 
-    let out = std::process::Command::new("osascript")
-        .arg("-e")
-        .arg(script)
-        .output()
+    let out = run_osascript_with_timeout(&script, Duration::from_millis(1500))
         .map_err(|e| format!("osascript write file reference failed: {e}"))?;
 
     if !out.status.success() {
@@ -609,6 +625,33 @@ fn normalize_file_path(value: &str) -> String {
     percent_decode_path(&path)
 }
 
+#[cfg(target_os = "macos")]
+fn run_osascript_with_timeout(script: &str, timeout: Duration) -> Result<Output, String> {
+    let mut child = Command::new("osascript")
+        .arg("-e")
+        .arg(script)
+        .spawn()
+        .map_err(|e| e.to_string())?;
+
+    let start = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => return child.wait_with_output().map_err(|e| e.to_string()),
+            Ok(None) if start.elapsed() >= timeout => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!("timed out after {}ms", timeout.as_millis()));
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(25)),
+            Err(e) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(e.to_string());
+            }
+        }
+    }
+}
+
 fn percent_decode_path(value: &str) -> String {
     let bytes = value.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
@@ -639,6 +682,7 @@ fn hex_value(byte: u8) -> Option<u8> {
     }
 }
 
+#[cfg(target_os = "macos")]
 fn escape_applescript_string(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
 }

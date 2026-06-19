@@ -71,6 +71,7 @@ export interface Alarm {
   repeat: string;
   active: boolean;
   skip_next: boolean;
+  sound?: string | null;
   created_at: string;
 }
 

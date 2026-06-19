@@ -26,7 +26,7 @@ const customDays = ref(clipboardRetention.value.days)
 const customCount = ref(clipboardRetention.value.count)
 const recordingShortcut = ref(false)
 const DEFAULT_SHORTCUT = 'CmdOrCtrl+Shift+V'
-type SoundTarget = 'pomodoro' | 'alarm'
+type SoundTarget = 'pomodoroStart' | 'pomodoroEnd' | 'alarm'
 
 interface CopiedSound {
   path: string
@@ -99,6 +99,10 @@ function customSoundName(target: SoundTarget) {
   return choice.type === 'custom' ? choice.name : ''
 }
 
+const soundTargets: SoundTarget[] = ['pomodoroStart', 'pomodoroEnd', 'alarm']
+
+const soundVolumePercent = computed(() => Math.round(soundSettings.value.volume * 100))
+
 function setSound(target: SoundTarget, value: string) {
   soundSettings.value[target] = value === 'synth' ? { type: 'synth' } : { type: 'preset', id: value }
   settings.saveSoundSettings()
@@ -107,6 +111,12 @@ function setSound(target: SoundTarget, value: string) {
 function onSoundSelect(target: SoundTarget, event: Event) {
   const value = event.target instanceof HTMLSelectElement ? event.target.value : 'synth'
   setSound(target, value)
+}
+
+function setSoundVolume(event: Event) {
+  const value = event.target instanceof HTMLInputElement ? Number(event.target.value) : soundVolumePercent.value
+  soundSettings.value.volume = Math.min(1, Math.max(0, value / 100))
+  settings.saveSoundSettings()
 }
 
 async function chooseCustomSound(target: SoundTarget) {
@@ -121,7 +131,7 @@ async function chooseCustomSound(target: SoundTarget) {
 }
 
 function previewSound(target: SoundTarget) {
-  playAlertChime(soundSettings.value[target])
+  playAlertChime(soundSettings.value[target], soundSettings.value.volume)
 }
 
 const themeOptions: Array<{ id: ThemeMode; icon: typeof Sun; label: string }> = [
@@ -258,8 +268,25 @@ onMounted(async () => {
       </h2>
       <p class="text-xs text-muted-foreground mb-3">{{ t('sound.desc') }}</p>
       <div class="space-y-3">
-        <div v-for="target in ['pomodoro', 'alarm'] as const" :key="target" class="flex flex-wrap items-center gap-2">
-          <span class="w-20 text-xs text-muted-foreground">{{ t(`sound.${target}`) }}</span>
+        <div class="rounded-lg bg-secondary/50 p-3">
+          <div class="mb-2 flex items-center justify-between gap-3">
+            <span class="text-xs font-medium text-muted-foreground">{{ t('sound.volume') }}</span>
+            <span class="font-mono text-sm font-semibold tabular-nums">{{ soundVolumePercent }}%</span>
+          </div>
+          <input
+            type="range"
+            min="0"
+            max="100"
+            step="5"
+            class="h-2 w-full accent-primary"
+            :value="soundVolumePercent"
+            :aria-label="t('sound.volume')"
+            @input="setSoundVolume"
+          />
+          <p class="mt-2 text-xs text-muted-foreground">{{ t('sound.volumeDesc') }}</p>
+        </div>
+        <div v-for="target in soundTargets" :key="target" class="flex flex-wrap items-center gap-2">
+          <span class="w-28 text-xs text-muted-foreground">{{ t(`sound.${target}`) }}</span>
           <select
             class="min-w-40 px-3 py-2 rounded-lg border bg-transparent text-sm"
             :value="soundValue(target)"

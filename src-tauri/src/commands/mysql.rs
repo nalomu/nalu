@@ -366,6 +366,11 @@ fn platform_mysqldump_candidates() -> Vec<PathBuf> {
             "/usr/local/bin/mariadb-dump".into(),
         ]
     }
+
+    #[cfg(target_os = "android")]
+    {
+        Vec::new()
+    }
 }
 
 fn find_on_path() -> Option<PathBuf> {

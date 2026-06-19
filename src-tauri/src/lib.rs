@@ -2,10 +2,14 @@ mod commands;
 mod db;
 mod sync;
 
+#[cfg(desktop)]
 use std::sync::Mutex;
 #[cfg(target_os = "macos")]
 use std::time::Instant;
-use tauri::{Emitter, Manager};
+#[cfg(desktop)]
+use tauri::Emitter;
+use tauri::Manager;
+#[cfg(desktop)]
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
 #[cfg(target_os = "macos")]
@@ -17,9 +21,11 @@ use tauri_nspanel::{WebviewWindowExt as PanelExt, panel};
 
 /// Stores the bundle ID of the app that was active before the popup was shown.
 /// Used by paste_to_active_app to know where to paste.
+#[cfg(target_os = "macos")]
 static PREVIOUS_APP_ID: Mutex<Option<String>> = Mutex::new(None);
 
 /// Tracks the currently registered clipboard shortcut string.
+#[cfg(desktop)]
 static CURRENT_SHORTCUT: Mutex<Option<String>> = Mutex::new(None);
 
 /// Marks that the next macOS app reactivation came from showing the clipboard popup.
@@ -94,11 +100,6 @@ fn get_frontmost_bundle_id_fast() -> Option<String> {
     let front_app = workspace.frontmostApplication()?;
     let bundle_id = front_app.bundleIdentifier()?;
     Some(bundle_id.to_string())
-}
-
-#[cfg(not(target_os = "macos"))]
-fn save_previous_app() -> bool {
-    false
 }
 
 #[cfg(target_os = "macos")]
@@ -409,7 +410,7 @@ fn send_cmd_v_by_cgevent() -> Result<(), String> {
 
 #[cfg(not(target_os = "macos"))]
 #[tauri::command]
-fn paste_to_active_app() -> Result<(), String> {
+fn paste_to_active_app(_app: tauri::AppHandle) -> Result<(), String> {
     Err("paste_to_active_app is only supported on macOS".to_string())
 }
 
@@ -457,6 +458,15 @@ fn open_accessibility_settings() -> Result<(), String> {
 /// Register the clipboard popup shortcut. Called by frontend on startup/settings change.
 #[tauri::command]
 fn register_clipboard_shortcut(app: tauri::AppHandle, shortcut: String) -> Result<(), String> {
+    #[cfg(not(desktop))]
+    {
+        let _ = app;
+        let _ = shortcut;
+        return Err("global shortcut is only supported on desktop".to_string());
+    }
+
+    #[cfg(desktop)]
+    {
     // Unregister previous shortcut if any
     if let Some(old) = CURRENT_SHORTCUT.lock().ok().and_then(|g| g.clone())
         && let Ok(old_parsed) = parse_shortcut(&old)
@@ -506,11 +516,20 @@ fn register_clipboard_shortcut(app: tauri::AppHandle, shortcut: String) -> Resul
     }
     tracing::info!("[register_clipboard_shortcut] registered: {}", shortcut);
     Ok(())
+    }
 }
 
 /// Unregister the clipboard popup shortcut.
 #[tauri::command]
 fn unregister_clipboard_shortcut(app: tauri::AppHandle) -> Result<(), String> {
+    #[cfg(not(desktop))]
+    {
+        let _ = app;
+        return Ok(());
+    }
+
+    #[cfg(desktop)]
+    {
     if let Some(old) = CURRENT_SHORTCUT.lock().ok().and_then(|g| g.clone()) {
         if let Ok(parsed) = parse_shortcut(&old) {
             app.global_shortcut()
@@ -523,8 +542,10 @@ fn unregister_clipboard_shortcut(app: tauri::AppHandle) -> Result<(), String> {
     }
     tracing::info!("[unregister_clipboard_shortcut] done");
     Ok(())
+    }
 }
 
+#[cfg(desktop)]
 fn parse_shortcut(s: &str) -> Result<tauri_plugin_global_shortcut::Shortcut, String> {
     use tauri_plugin_global_shortcut::{Code, Modifiers, Shortcut};
 
@@ -612,6 +633,7 @@ fn parse_shortcut(s: &str) -> Result<tauri_plugin_global_shortcut::Shortcut, Str
 }
 
 /// Toggle popup from the global shortcut handler.
+#[cfg(desktop)]
 fn toggle_popup_window(app: &tauri::AppHandle) {
     toggle_popup_impl(app);
 }
@@ -674,7 +696,7 @@ fn toggle_popup_impl(app: &tauri::AppHandle) {
             }
         }
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(all(desktop, not(target_os = "macos")))]
     {
         if let Some(window) = app.get_webview_window("clipboard-popup") {
             let visible = window.is_visible().unwrap_or(false);
@@ -687,9 +709,14 @@ fn toggle_popup_impl(app: &tauri::AppHandle) {
             }
         }
     }
+    #[cfg(not(desktop))]
+    {
+        let _ = app;
+    }
 }
 
 /// Show and activate the main window (called from tray icon).
+#[cfg(desktop)]
 fn show_main_window(app: &tauri::AppHandle) {
     if let Some(main) = app.get_webview_window("main") {
         let _ = main.show();
@@ -707,6 +734,15 @@ fn update_tray_menu(
     app: tauri::AppHandle,
     labels: std::collections::HashMap<String, String>,
 ) -> Result<(), String> {
+    #[cfg(not(desktop))]
+    {
+        let _ = app;
+        let _ = labels;
+        return Ok(());
+    }
+
+    #[cfg(desktop)]
+    {
     let label = |key: &str, fallback: &str| -> String {
         labels
             .get(key)
@@ -746,9 +782,11 @@ fn update_tray_menu(
     }
 
     Ok(())
+    }
 }
 
 /// Show main window and emit a navigation event the frontend listens for.
+#[cfg(desktop)]
 fn show_and_navigate(app: &tauri::AppHandle, route: &str) {
     show_main_window(app);
     if let Err(e) = app.emit("tray-navigate", route.to_string()) {
@@ -768,7 +806,8 @@ pub fn run() {
         )
         .init();
 
-    tauri::Builder::default()
+    #[allow(unused_mut)]
+    let mut builder = tauri::Builder::default()
         // Core plugins
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
@@ -777,13 +816,24 @@ pub fn run() {
         .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
-        .plugin(tauri_plugin_process::init())
-        .plugin(tauri_plugin_autostart::init(
-            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
-            Some(vec![]),
-        ))
-        .plugin(tauri_nspanel::init())
-        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        .plugin(tauri_plugin_process::init());
+
+    #[cfg(target_os = "macos")]
+    {
+        builder = builder
+            .plugin(tauri_plugin_autostart::init(
+                tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+                Some(vec![]),
+            ))
+            .plugin(tauri_nspanel::init());
+    }
+
+    #[cfg(desktop)]
+    {
+        builder = builder.plugin(tauri_plugin_global_shortcut::Builder::new().build());
+    }
+
+    builder
         // All commands
         .invoke_handler(tauri::generate_handler![
             greet,
@@ -867,6 +917,7 @@ pub fn run() {
             commands::alarm::get_alarms,
             commands::alarm::add_alarm,
             commands::alarm::skip_next_alarm,
+            commands::alarm::update_alarm_sound,
             commands::alarm::toggle_alarm,
             commands::alarm::delete_alarm,
             commands::sync::sync_pair,
@@ -906,7 +957,7 @@ pub fn run() {
                     }
                 }
             }
-            #[cfg(not(target_os = "macos"))]
+            #[cfg(all(desktop, not(target_os = "macos")))]
             {
                 if let Some(popup) = app.get_webview_window("clipboard-popup") {
                     let _ = popup.set_always_on_top(true);
@@ -928,6 +979,8 @@ pub fn run() {
             }
 
             // --- Tray icon: click to show main window ---
+            #[cfg(desktop)]
+            {
             let tray_menu = tauri::menu::MenuBuilder::new(app)
                 .text("show_main", "Open Nalu")
                 .separator()
@@ -986,6 +1039,7 @@ pub fn run() {
             // Shortcut registration is now driven by the frontend via commands.
             // On startup the frontend will call register_clipboard_shortcut if enabled.
             tracing::info!("[Setup] Global shortcut registration deferred to frontend");
+            }
 
             // --- Background alarm checker (runs in Rust, immune to WebView throttling) ---
             commands::alarm::start_alarm_checker(app.handle().clone());
@@ -997,7 +1051,14 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error building tauri application")
         .run(|app, event| {
+            #[cfg(not(desktop))]
+            {
+                let _ = app;
+                let _ = event;
+            }
+
             // Handle macOS dock icon click / reopen event
+            #[cfg(desktop)]
             if let tauri::RunEvent::Reopen { .. } = event {
                 #[cfg(target_os = "macos")]
                 if should_suppress_reopen_for_popup() {

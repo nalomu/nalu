@@ -12,6 +12,7 @@ pub struct Alarm {
     pub repeat: String,
     pub active: bool,
     pub skip_next: bool,
+    pub sound: Option<String>,
     pub created_at: String,
 }
 
@@ -23,7 +24,7 @@ pub fn get_alarms() -> Result<Vec<Alarm>, String> {
     let db = get_connection()?;
     let conn = db.as_ref().unwrap();
     let mut stmt = conn
-        .prepare("SELECT id, time, label, repeat, active, COALESCE(skip_next,0), created_at FROM alarms ORDER BY time ASC")
+        .prepare("SELECT id, time, label, repeat, active, COALESCE(skip_next,0), sound, created_at FROM alarms ORDER BY time ASC")
         .map_err(|e| e.to_string())?;
     let alarms = stmt
         .query_map([], |row| {
@@ -34,7 +35,8 @@ pub fn get_alarms() -> Result<Vec<Alarm>, String> {
                 repeat: row.get(3)?,
                 active: row.get::<_, i32>(4)? != 0,
                 skip_next: row.get::<_, i32>(5)? != 0,
-                created_at: row.get(6)?,
+                sound: row.get(6)?,
+                created_at: row.get(7)?,
             })
         })
         .map_err(|e| e.to_string())?
@@ -44,14 +46,19 @@ pub fn get_alarms() -> Result<Vec<Alarm>, String> {
 }
 
 #[tauri::command]
-pub fn add_alarm(time: String, label: String, repeat: String) -> Result<Alarm, String> {
+pub fn add_alarm(
+    time: String,
+    label: String,
+    repeat: String,
+    sound: Option<String>,
+) -> Result<Alarm, String> {
     let id = uuid::Uuid::new_v4().to_string();
 
     let db = get_connection()?;
     let conn = db.as_ref().unwrap();
     conn.execute(
-        "INSERT INTO alarms (id, time, label, repeat) VALUES (?1, ?2, ?3, ?4)",
-        rusqlite::params![id, time, label, repeat],
+        "INSERT INTO alarms (id, time, label, repeat, sound) VALUES (?1, ?2, ?3, ?4, ?5)",
+        rusqlite::params![id, time, label, repeat, sound],
     )
     .map_err(|e| e.to_string())?;
 
@@ -62,6 +69,7 @@ pub fn add_alarm(time: String, label: String, repeat: String) -> Result<Alarm, S
         repeat,
         active: true,
         skip_next: false,
+        sound,
         created_at: chrono::Utc::now().to_rfc3339(),
     })
 }
@@ -108,7 +116,7 @@ pub fn skip_next_alarm(id: String) -> Result<Alarm, String> {
     )
     .map_err(|e| e.to_string())?;
     conn.query_row(
-        "SELECT id, time, label, repeat, active, COALESCE(skip_next,0), created_at FROM alarms WHERE id = ?1",
+        "SELECT id, time, label, repeat, active, COALESCE(skip_next,0), sound, created_at FROM alarms WHERE id = ?1",
         rusqlite::params![id],
         |row| {
             Ok(Alarm {
@@ -118,7 +126,36 @@ pub fn skip_next_alarm(id: String) -> Result<Alarm, String> {
                 repeat: row.get(3)?,
                 active: row.get::<_, i32>(4)? != 0,
                 skip_next: row.get::<_, i32>(5)? != 0,
-                created_at: row.get(6)?,
+                sound: row.get(6)?,
+                created_at: row.get(7)?,
+            })
+        },
+    )
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn update_alarm_sound(id: String, sound: Option<String>) -> Result<Alarm, String> {
+    let db = get_connection()?;
+    let conn = db.as_ref().unwrap();
+    conn.execute(
+        "UPDATE alarms SET sound = ?1 WHERE id = ?2",
+        rusqlite::params![sound, id],
+    )
+    .map_err(|e| e.to_string())?;
+    conn.query_row(
+        "SELECT id, time, label, repeat, active, COALESCE(skip_next,0), sound, created_at FROM alarms WHERE id = ?1",
+        rusqlite::params![id],
+        |row| {
+            Ok(Alarm {
+                id: row.get(0)?,
+                time: row.get(1)?,
+                label: row.get(2)?,
+                repeat: row.get(3)?,
+                active: row.get::<_, i32>(4)? != 0,
+                skip_next: row.get::<_, i32>(5)? != 0,
+                sound: row.get(6)?,
+                created_at: row.get(7)?,
             })
         },
     )
@@ -302,6 +339,7 @@ mod tests {
             repeat: "daily".into(),
             active: true,
             skip_next: false,
+            sound: None,
             created_at: "".into(),
         };
         assert!(alarm.active && alarm.time == "14:30" && is_day_match(&alarm.repeat));

@@ -4,19 +4,23 @@ import { storeToRefs } from 'pinia'
 import { useRouter } from 'vue-router'
 import { invoke } from '@tauri-apps/api/core'
 import { writeText } from '@tauri-apps/plugin-clipboard-manager'
-import { CheckSquare, FileText, Calendar, Scissors, Timer, Database, AlarmClock, Settings, Circle, Radio, Copy, Type, Image as ImageIcon, Sparkles, Play, Pause, Bell, BellOff, Clock, ChevronRight } from 'lucide-vue-next'
+import { CheckSquare, FileText, Calendar, Scissors, Timer, Database, AlarmClock, Settings, Circle, Radio, Copy, Type, Image as ImageIcon, Sparkles, Play, Pause, Bell, BellOff, Clock, ChevronRight, Volume2 } from 'lucide-vue-next'
 import type { Task, Note, Schedule, ClipboardEntry, Alarm, PomodoroState } from '$lib/types'
 import { useClipboardStore } from '$lib/stores/clipboardStore'
+import { useSettingsStore } from '$lib/stores/settingsStore'
 import { useI18n } from '$lib/i18n'
 import AiChatWidget from '$lib/components/AiChatWidget.vue'
 import { useAiRefresh } from '$lib/composables/useAiRefresh'
 import { useMobile } from '$lib/composables/useMobile'
+import { playAlertChime } from '$lib/utils/alertSound'
 
 const router = useRouter()
 const { t } = useI18n()
 const { isMobile, isRouteEnabled } = useMobile()
 const clipboard = useClipboardStore()
+const settings = useSettingsStore()
 const { monitoring } = storeToRefs(clipboard)
+const { soundSettings } = storeToRefs(settings)
 const tasks = ref<Task[]>([])
 const editingId = ref<string | null>(null)
 const editTitle = ref('')
@@ -27,6 +31,7 @@ const alarms = ref<Alarm[]>([])
 const pomodoro = ref<PomodoroState | null>(null)
 const pendingTasks = computed(() => tasks.value.filter((task) => !task.done))
 const doneTasks = computed(() => tasks.value.filter((task) => task.done))
+const soundVolumePercent = computed(() => Math.round(soundSettings.value.volume * 100))
 let interval: ReturnType<typeof setInterval>
 
 const quickNav = [
@@ -126,6 +131,7 @@ async function togglePomodoro() {
     pomodoro.value = await invoke('pomodoro_pause')
   } else {
     await invoke('pomodoro_start')
+    playAlertChime(soundSettings.value.pomodoroStart, soundSettings.value.volume)
     pomodoro.value = await invoke('pomodoro_get_state')
   }
 }
@@ -133,6 +139,16 @@ async function togglePomodoro() {
 async function toggleAlarm(id: string) {
   await invoke('toggle_alarm', { id })
   alarms.value = await invoke('get_alarms')
+}
+
+function setDashboardSoundVolume(event: Event) {
+  const value = event.target instanceof HTMLInputElement ? Number(event.target.value) : soundVolumePercent.value
+  soundSettings.value.volume = Math.min(1, Math.max(0, value / 100))
+  settings.saveSoundSettings()
+}
+
+function previewDashboardSound() {
+  playAlertChime(soundSettings.value.alarm, soundSettings.value.volume)
 }
 
 onMounted(async () => {
@@ -149,6 +165,76 @@ useAiRefresh(loadData)
       <h1 class="text-2xl font-bold tracking-tight">{{ t('dashboard.title') }}</h1>
       <p class="text-sm text-muted-foreground mt-1">{{ t('dashboard.welcome') }}, Nalomu</p>
     </header>
+
+    <!-- Quick controls -->
+    <section class="mb-8">
+      <div class="mb-3 flex items-center justify-between gap-3">
+        <h2 class="text-xs font-semibold text-muted-foreground uppercase tracking-wider">{{ t('dashboardExt.quickControls') }}</h2>
+        <button class="inline-flex items-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-primary" @click="router.push('/settings')">
+          {{ t('dashboardExt.allSettings') }}
+          <ChevronRight class="w-3.5 h-3.5" />
+        </button>
+      </div>
+      <div class="grid gap-3 lg:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)]">
+        <div class="rounded-xl border bg-card p-4">
+          <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div class="min-w-0">
+              <div class="flex items-center gap-2 text-sm font-semibold">
+                <Volume2 class="w-4 h-4 text-primary" />
+                {{ t('sound.volume') }}
+              </div>
+              <p class="mt-1 text-xs text-muted-foreground">{{ t('dashboardExt.soundControlDesc') }}</p>
+            </div>
+            <div class="font-mono text-2xl font-bold tabular-nums">{{ soundVolumePercent }}%</div>
+          </div>
+          <div class="mt-4 grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
+            <input
+              type="range"
+              min="0"
+              max="100"
+              step="5"
+              class="h-2 w-full accent-primary"
+              :value="soundVolumePercent"
+              :aria-label="t('sound.volume')"
+              @input="setDashboardSoundVolume"
+            />
+            <button class="inline-flex h-9 items-center justify-center gap-1.5 rounded-lg bg-secondary px-3 text-sm transition-colors hover:bg-secondary/70" @click="previewDashboardSound">
+              <Play class="w-3.5 h-3.5" />
+              {{ t('sound.preview') }}
+            </button>
+          </div>
+        </div>
+
+        <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-1">
+          <button class="flex items-center justify-between gap-3 rounded-xl border bg-card p-4 text-left transition-colors hover:border-primary/40" @click="clipboard.toggleMonitoring">
+            <div>
+              <div class="flex items-center gap-2 text-sm font-semibold">
+                <Radio class="w-4 h-4" :class="monitoring ? 'text-success' : 'text-muted-foreground'" />
+                {{ t('dashboardExt.clipboardStatus') }}
+              </div>
+              <p class="mt-1 text-xs text-muted-foreground">{{ monitoring ? t('dashboardExt.clipboardMonitoring') : t('dashboardExt.clipboardOff') }}</p>
+            </div>
+            <span class="relative h-6 w-11 rounded-full" :class="monitoring ? 'bg-primary' : 'bg-input'">
+              <span class="absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform" :class="{ 'translate-x-5': monitoring }" />
+            </span>
+          </button>
+
+          <button class="flex items-center justify-between gap-3 rounded-xl border bg-card p-4 text-left transition-colors hover:border-primary/40" @click="togglePomodoro">
+            <div>
+              <div class="flex items-center gap-2 text-sm font-semibold">
+                <Timer class="w-4 h-4" :class="pomodoroDisplay?.isRunning ? 'text-primary' : 'text-muted-foreground'" />
+                {{ t('nav.pomodoro') }}
+              </div>
+              <p class="mt-1 text-xs text-muted-foreground">{{ pomodoroDisplay?.isRunning ? t('pomodoro.running') : t('pomodoro.paused') }}</p>
+            </div>
+            <span class="rounded-full bg-secondary p-2">
+              <Pause v-if="pomodoroDisplay?.isRunning" class="w-4 h-4 text-muted-foreground" />
+              <Play v-else class="w-4 h-4 text-muted-foreground" />
+            </span>
+          </button>
+        </div>
+      </div>
+    </section>
 
     <!-- Quick nav -->
     <section class="mb-8">

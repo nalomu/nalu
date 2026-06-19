@@ -7,17 +7,26 @@
  */
 
 import { convertFileSrc } from "@tauri-apps/api/core";
+import { emit, listen } from "@tauri-apps/api/event";
 import type { SoundChoice } from "$lib/stores/settingsStore";
+
+export const ALERT_AUDIO_STOP_EVENT = "alert-audio-stop";
 
 let audioCtx: AudioContext | null = null;
 let loopTimer: ReturnType<typeof setTimeout> | null = null;
 let unlocked = false;
 const activeAudio = new Set<HTMLAudioElement>();
 let oneShotAudio: HTMLAudioElement | null = null;
+let loopAudio: HTMLAudioElement | null = null;
+let stopListenerInitialized = false;
 
 // Generation counter — incremented on every stop().
 // Any loop whose generation doesn't match is an orphan and must self-terminate.
 let generation = 0;
+
+function clampVolume(volume = 1) {
+  return Math.min(1, Math.max(0, volume));
+}
 
 function getCtx(): AudioContext {
   if (!audioCtx || audioCtx.state === "closed") {
@@ -61,9 +70,10 @@ function resolveSoundUrl(choice?: SoundChoice): string | null {
   return preset?.url || null;
 }
 
-function playAudioUrl(url: string): Promise<void> {
+function playAudioUrl(url: string, volume = 1): Promise<void> {
   const audio = new Audio(url);
   audio.preload = "auto";
+  audio.volume = clampVolume(volume);
   activeAudio.add(audio);
   audio.addEventListener("ended", () => activeAudio.delete(audio), { once: true });
   audio.addEventListener("error", () => activeAudio.delete(audio), { once: true });
@@ -73,10 +83,11 @@ function playAudioUrl(url: string): Promise<void> {
   });
 }
 
-function playChime() {
+function playChime(volume = 1) {
   try {
     const ctx = getCtx();
     if (ctx.state === "closed") return;
+    const normalizedVolume = clampVolume(volume);
 
     const now = ctx.currentTime;
     for (const note of CHIME_NOTES) {
@@ -90,12 +101,12 @@ function playChime() {
 
       const gain = ctx.createGain();
       gain.gain.setValueAtTime(0, now + note.time);
-      gain.gain.linearRampToValueAtTime(note.volume, now + note.time + 0.02);
+      gain.gain.linearRampToValueAtTime(note.volume * normalizedVolume, now + note.time + 0.02);
       gain.gain.exponentialRampToValueAtTime(0.001, now + note.time + note.duration);
 
       const gain2 = ctx.createGain();
       gain2.gain.setValueAtTime(0, now + note.time);
-      gain2.gain.linearRampToValueAtTime(note.volume * 0.12, now + note.time + 0.02);
+      gain2.gain.linearRampToValueAtTime(note.volume * 0.12 * normalizedVolume, now + note.time + 0.02);
       gain2.gain.exponentialRampToValueAtTime(0.001, now + note.time + note.duration * 0.7);
 
       osc.connect(gain);
@@ -114,7 +125,7 @@ function playChime() {
 }
 
 /** Play the chime melody once (~4 seconds). Stops any previous one-shot before starting. */
-export function playAlertChime(choice?: SoundChoice) {
+export function playAlertChime(choice?: SoundChoice, volume = 1) {
   // Stop previous one-shot playback before starting a new one
   if (oneShotAudio) {
     try { oneShotAudio.pause(); oneShotAudio.currentTime = 0; } catch { /* ignore */ }
@@ -125,17 +136,18 @@ export function playAlertChime(choice?: SoundChoice) {
   if (url) {
     const audio = new Audio(url);
     audio.preload = "auto";
+    audio.volume = clampVolume(volume);
     oneShotAudio = audio;
     audio.addEventListener("ended", () => { if (oneShotAudio === audio) oneShotAudio = null; }, { once: true });
     audio.addEventListener("error", () => { if (oneShotAudio === audio) oneShotAudio = null; }, { once: true });
     void audio.play().catch((error) => {
       console.error("[alertSound] audio asset playback failed, falling back to synth:", error);
       if (oneShotAudio === audio) oneShotAudio = null;
-      playChime();
+      playChime(volume);
     });
     return;
   }
-  playChime();
+  playChime(volume);
 }
 
 /**
@@ -143,21 +155,36 @@ export function playAlertChime(choice?: SoundChoice) {
  * Each call gets its own generation tag; if stopLoopingAlert() bumps the
  * global generation, this loop detects the mismatch and self-terminates.
  */
-export function startLoopingAlert(choice?: SoundChoice) {
+export function startLoopingAlert(choice?: SoundChoice, volume = 1) {
   const myGen = ++generation;
   const url = resolveSoundUrl(choice);
+
+  if (url) {
+    const audio = new Audio(url);
+    audio.preload = "auto";
+    audio.loop = true;
+    audio.volume = clampVolume(volume);
+    loopAudio = audio;
+    activeAudio.add(audio);
+    audio.addEventListener("error", () => {
+      activeAudio.delete(audio);
+      if (loopAudio === audio) loopAudio = null;
+    }, { once: true });
+    void audio.play().catch((error) => {
+      console.error("[alertSound] looping audio asset failed, falling back to synth:", error);
+      activeAudio.delete(audio);
+      if (loopAudio === audio) loopAudio = null;
+      if (myGen === generation) {
+        loopTimer = setTimeout(tick, 0);
+      }
+    });
+    return;
+  }
 
   function tick() {
     // If generation changed, we're an orphan — die silently
     if (myGen !== generation) return;
-    if (url) {
-      void playAudioUrl(url).catch((error) => {
-        console.error("[alertSound] looping audio asset failed, falling back to synth:", error);
-        playChime();
-      });
-    } else {
-      playChime();
-    }
+    playChime(volume);
     loopTimer = setTimeout(tick, LOOP_INTERVAL_SECONDS * 1000);
   }
   tick();
@@ -181,10 +208,38 @@ export function stopLoopingAlert() {
     } catch { /* ignore */ }
   }
   activeAudio.clear();
+  loopAudio = null;
+  if (oneShotAudio) {
+    try {
+      oneShotAudio.pause();
+      oneShotAudio.currentTime = 0;
+    } catch { /* ignore */ }
+    oneShotAudio = null;
+  }
   if (audioCtx && audioCtx.state !== "closed") {
     try { audioCtx.close(); } catch { /* ignore */ }
   }
   audioCtx = null;
+}
+
+export async function initAlertAudioStopListener() {
+  if (stopListenerInitialized) return;
+  stopListenerInitialized = true;
+  try {
+    await listen(ALERT_AUDIO_STOP_EVENT, () => {
+      stopLoopingAlert();
+    });
+  } catch (error) {
+    stopListenerInitialized = false;
+    console.warn("[alertSound] alert audio stop listener failed:", error);
+  }
+}
+
+export function stopAllAlertAudio(reason = "dismiss") {
+  stopLoopingAlert();
+  void emit(ALERT_AUDIO_STOP_EVENT, { reason }).catch((error) => {
+    console.warn("[alertSound] alert audio stop broadcast failed:", error);
+  });
 }
 
 export function unlockAlertAudio() {

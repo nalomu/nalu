@@ -12,3 +12,7 @@ vite.config.ts.timestamp-*
 .idea/
 test-results/
 target/
+
+docs/.vuepress/dist/
+docs/.vuepress/.cache/
+docs/.vuepress/.temp/

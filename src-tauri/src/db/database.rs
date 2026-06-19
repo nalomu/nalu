@@ -86,8 +86,9 @@ pub fn init(path: &std::path::Path) -> Result<(), String> {
     // Run kanban board migration
     migrate_kanban_schema(&conn)?;
 
-    // Run alarm skip_next migration
+    // Run alarm migrations
     migrate_alarm_skip_next(&conn)?;
+    migrate_alarm_sound(&conn)?;
 
     let mut db = DB.lock().map_err(|e| e.to_string())?;
     *db = Some(conn);
@@ -301,6 +302,16 @@ fn migrate_alarm_skip_next(conn: &Connection) -> Result<(), String> {
     let has_column = conn.prepare("SELECT skip_next FROM alarms LIMIT 1").is_ok();
     if !has_column {
         conn.execute_batch("ALTER TABLE alarms ADD COLUMN skip_next INTEGER NOT NULL DEFAULT 0;")
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+/// Idempotent migration: add per-alarm sound choice JSON.
+fn migrate_alarm_sound(conn: &Connection) -> Result<(), String> {
+    let has_column = conn.prepare("SELECT sound FROM alarms LIMIT 1").is_ok();
+    if !has_column {
+        conn.execute_batch("ALTER TABLE alarms ADD COLUMN sound TEXT;")
             .map_err(|e| e.to_string())?;
     }
     Ok(())
