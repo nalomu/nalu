@@ -19,6 +19,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '
 
 type Tab = 'databases' | 'users' | 'transfer' | 'settings';
 type ServerUser = { user: string; host: string; plugin: string };
+type MessageType = 'success' | 'error';
+type TransferKind = 'import' | 'export';
 const activeTab = ref<Tab>('databases')
 const config = reactive({ host: '127.0.0.1', port: 3306, user: 'root', password: '', database: '' })
 const connected = ref(false)
@@ -45,6 +47,16 @@ const lastExportPath = ref('')
 const selectedImportDatabase = ref('')
 const importFile = ref('')
 const serverUsers = ref<ServerUser[]>([])
+const messageDialogOpen = ref(false)
+const messageDialogType = ref<MessageType>('success')
+const messageDialogTitle = ref('')
+const messageDialogMessage = ref('')
+const confirmOpen = ref(false)
+const confirmTitle = ref('')
+const confirmMessage = ref('')
+let confirmResolver: ((value: boolean) => void) | null = null
+const transferProgress = ref<{ kind: TransferKind; label: string; percent: number } | null>(null)
+let transferTimer: ReturnType<typeof setInterval> | null = null
 const PROTECTED_USERS = ['root', 'mysql.sys', 'mysql.session', 'mysql.infoschema', 'debian-sys-maint']
 const managedDatabases = computed(() => [...new Set([...databases.value, ...users.value.flatMap((item) => item.databases.split(',').map((value) => value.trim()).filter(Boolean))])].sort())
 const totalPages = computed(() => Math.max(1, Math.ceil(managedDatabases.value.length / pageSize)))
@@ -53,6 +65,62 @@ const pagedDatabases = computed(() => managedDatabases.value.slice((currentPage.
 function clearMessages() {
   error.value = ''
   success.value = ''
+}
+
+function showSuccess(message: string, title = '操作完成') {
+  success.value = message
+  error.value = ''
+  messageDialogType.value = 'success'
+  messageDialogTitle.value = title
+  messageDialogMessage.value = message
+  messageDialogOpen.value = true
+}
+
+function showError(exception: unknown, title = '操作失败') {
+  const message = String(exception)
+  error.value = message
+  success.value = ''
+  messageDialogType.value = 'error'
+  messageDialogTitle.value = title
+  messageDialogMessage.value = message
+  messageDialogOpen.value = true
+}
+
+function requestConfirm(title: string, message: string) {
+  confirmTitle.value = title
+  confirmMessage.value = message
+  confirmOpen.value = true
+  return new Promise<boolean>((resolve) => {
+    confirmResolver = resolve
+  })
+}
+
+function resolveConfirm(value: boolean) {
+  confirmOpen.value = false
+  confirmResolver?.(value)
+  confirmResolver = null
+}
+
+function startTransfer(kind: TransferKind, label: string) {
+  if (transferTimer) clearInterval(transferTimer)
+  transferProgress.value = { kind, label, percent: 8 }
+  transferTimer = setInterval(() => {
+    if (!transferProgress.value || transferProgress.value.percent >= 90) return
+    transferProgress.value.percent += transferProgress.value.percent < 60 ? 8 : 3
+  }, 500)
+}
+
+function finishTransfer(successful: boolean) {
+  if (transferTimer) {
+    clearInterval(transferTimer)
+    transferTimer = null
+  }
+  if (transferProgress.value) {
+    transferProgress.value.percent = successful ? 100 : 0
+  }
+  setTimeout(() => {
+    transferProgress.value = null
+  }, successful ? 900 : 300)
 }
 
 function userForDatabase(database: string) { return users.value.find((item) => item.databases.split(',').map((value) => value.trim()).includes(database)) }
@@ -73,11 +141,11 @@ async function testConnection(showMessage = true) {
   try {
     connected.value = await invoke('mysql_test_connection', { config })
     saveConfig()
-    if (showMessage) success.value = 'MySQL 连接成功'
+    if (showMessage) showSuccess('MySQL 连接成功')
     if (connected.value) await Promise.all([refreshDatabases(), loadServerUsers()])
   } catch (exception) {
     connected.value = false
-    error.value = String(exception)
+    showError(exception, '连接失败')
   } finally {
     loading.value = false
   }
@@ -91,7 +159,7 @@ async function refreshDatabases() {
     selectedExportDatabase.value ||= serverDatabases[0] || ''
     selectedImportDatabase.value ||= serverDatabases[0] || ''
   } catch (exception) {
-    error.value = String(exception)
+    showError(exception, '刷新数据库失败')
   }
 }
 
@@ -105,20 +173,20 @@ async function loadServerUsers() {
   try {
     serverUsers.value = await invoke<ServerUser[]>('mysql_list_server_users', { config })
   } catch (exception) {
-    error.value = String(exception)
+    showError(exception, '读取用户失败')
   }
 }
 
 async function dropServerUser(item: ServerUser) {
-  if (!confirm(`确认删除用户 ${item.user}@${item.host}？此操作不可恢复。`)) return
+  if (!await requestConfirm('删除 MySQL 用户', `确认删除用户 ${item.user}@${item.host}？此操作不可恢复。`)) return
   actionLoading.value = true
   clearMessages()
   try {
     await invoke('mysql_drop_server_user', { config, username: item.user, host: item.host })
     await loadServerUsers()
-    success.value = `用户 ${item.user}@${item.host} 已删除`
+    showSuccess(`用户 ${item.user}@${item.host} 已删除`)
   } catch (exception) {
-    error.value = String(exception)
+    showError(exception, '删除用户失败')
   } finally {
     actionLoading.value = false
   }
@@ -141,9 +209,9 @@ async function saveCredential() {
     await invoke('upsert_mysql_user', { ...credentialForm })
     await loadUsers()
     credentialOpen.value = false
-    success.value = '凭据已验证并保存'
+    showSuccess('凭据已验证并保存')
   } catch (exception) {
-    error.value = String(exception)
+    showError(exception, '保存凭据失败')
   } finally {
     actionLoading.value = false
   }
@@ -156,9 +224,9 @@ async function createDatabase() {
     await invoke('mysql_create_database_with_user', { config, databaseName: createForm.database.trim(), newUsername: createForm.username.trim(), newPassword: createForm.password, host: createForm.host.trim() || 'localhost' })
     createOpen.value = false
     await refreshDatabases()
-    success.value = `数据库 ${createForm.database} 和管理用户已创建`
+    showSuccess(`数据库 ${createForm.database} 和管理用户已创建`)
   } catch (exception) {
-    error.value = String(exception)
+    showError(exception, '创建数据库失败')
   } finally {
     actionLoading.value = false
   }
@@ -166,13 +234,13 @@ async function createDatabase() {
 
 async function deleteDatabase(database: string) {
   const user = userForDatabase(database)
-  if (!confirm(`确认删除数据库 ${database}？此操作不可恢复。`)) return
+  if (!await requestConfirm('删除数据库', `确认删除数据库 ${database}？此操作不可恢复。`)) return
   try {
     await invoke('mysql_delete_database_with_user', { config, databaseName: database, username: user?.username || null })
     await refreshDatabases()
-    success.value = `数据库 ${database} 已删除`
+    showSuccess(`数据库 ${database} 已删除`)
   } catch (exception) {
-    error.value = String(exception)
+    showError(exception, '删除数据库失败')
   }
 }
 
@@ -190,9 +258,9 @@ async function importCredentials() {
       imported++
     }
     await loadUsers()
-    success.value = `已验证并导入 ${imported} 条凭据`
+    showSuccess(`已验证并导入 ${imported} 条凭据`)
   } catch (exception) {
-    error.value = String(exception)
+    showError(exception, '导入凭据失败')
   }
 }
 
@@ -200,29 +268,37 @@ async function exportCredentials() {
   const path = await save({ defaultPath: 'mysql-credentials.json', filters: [{ name: 'MySQL 凭据', extensions: ['json'] }] })
   if (!path) return
   await writeTextFile(path, JSON.stringify(users.value.map(({ username, password, databases: database }) => ({ database, username, password })), null, 2))
-  success.value = '凭据已导出'
+  showSuccess('凭据已导出')
 }
 
 async function exportDatabase() {
   actionLoading.value = true
+  clearMessages()
+  startTransfer('export', `正在导出 ${selectedExportDatabase.value}`)
   try {
     lastExportPath.value = await invoke('mysql_export', { config: { ...config, database: selectedExportDatabase.value }, exportDir: exportDir.value, table: null })
-    success.value = `数据库已导出到 ${lastExportPath.value}`
+    finishTransfer(true)
+    showSuccess(`数据库已导出到 ${lastExportPath.value}`, '导出完成')
   } catch (exception) {
-    error.value = String(exception)
+    finishTransfer(false)
+    showError(exception, '导出失败')
   } finally {
     actionLoading.value = false
   }
 }
 
 async function importDatabase() {
-  if (!confirm(`确认导入到 ${selectedImportDatabase.value}？`)) return
+  if (!await requestConfirm('导入 SQL 文件', `确认导入到 ${selectedImportDatabase.value}？导入过程可能覆盖同名对象。`)) return
   actionLoading.value = true
+  clearMessages()
+  startTransfer('import', `正在导入 ${selectedImportDatabase.value}`)
   try {
-    await invoke('mysql_import', { config: { ...config, database: selectedImportDatabase.value }, filePath: importFile.value })
-    success.value = 'SQL 文件已导入'
+    const statementCount = await invoke<number>('mysql_import', { config: { ...config, database: selectedImportDatabase.value }, filePath: importFile.value })
+    finishTransfer(true)
+    showSuccess(`SQL 文件已导入，共执行约 ${statementCount} 条语句`, '导入完成')
   } catch (exception) {
-    error.value = String(exception)
+    finishTransfer(false)
+    showError(exception, '导入失败')
   } finally {
     actionLoading.value = false
   }
@@ -233,7 +309,7 @@ async function updatePassword() {
   await invoke('update_mysql_user', { id: selectedUser.value.id, password: updatedPassword.value, databases: null })
   await loadUsers()
   selectedUser.value = null
-  success.value = '本地凭据密码已更新'
+  showSuccess('本地凭据密码已更新')
 }
 
 onMounted(async () => {
@@ -250,7 +326,7 @@ onMounted(async () => {
   try {
     await loadUsers()
   } catch (exception) {
-    error.value = String(exception)
+    showError(exception, '初始化 MySQL 管理器失败')
   }
   if (config.password) await testConnection(false)
 })
@@ -434,10 +510,20 @@ onMounted(async () => {
                 {{ exportDir || '选择目录' }}
               </button>
               <button class="primary-button mt-4" :disabled="!selectedExportDatabase || !exportDir || actionLoading" @click="exportDatabase">
-                <Download class="w-4 h-4" />
-                导出
+                <LoaderCircle v-if="transferProgress?.kind === 'export'" class="w-4 h-4 animate-spin" />
+                <Download v-else class="w-4 h-4" />
+                {{ transferProgress?.kind === 'export' ? '导出中' : '导出' }}
               </button>
               <button v-if="lastExportPath" class="action-link ml-3" @click="openPath(exportDir)">打开目录</button>
+              <div v-if="transferProgress?.kind === 'export'" class="transfer-progress mt-4">
+                <div class="flex items-center justify-between text-xs">
+                  <span>{{ transferProgress.label }}</span>
+                  <span>{{ transferProgress.percent }}%</span>
+                </div>
+                <div class="progress-track">
+                  <div class="progress-bar" :style="{ width: `${transferProgress.percent}%` }" />
+                </div>
+              </div>
             </div>
             <div class="panel p-5">
               <h3 class="font-semibold flex gap-2 mb-4">
@@ -450,7 +536,20 @@ onMounted(async () => {
               <button class="upload-zone mt-4" @click="open({ filters: [{ name: 'SQL', extensions: ['sql'] }] }).then(path => { if (path) importFile = path as string })">
                 <Upload class="w-8 h-8" />
                 <span>{{ importFile || '选择 SQL 文件' }}</span></button>
-              <button class="primary-button mt-4" :disabled="!selectedImportDatabase || !importFile || actionLoading" @click="importDatabase">开始导入</button>
+              <button class="primary-button mt-4" :disabled="!selectedImportDatabase || !importFile || actionLoading" @click="importDatabase">
+                <LoaderCircle v-if="transferProgress?.kind === 'import'" class="w-4 h-4 animate-spin" />
+                <Upload v-else class="w-4 h-4" />
+                {{ transferProgress?.kind === 'import' ? '导入中' : '开始导入' }}
+              </button>
+              <div v-if="transferProgress?.kind === 'import'" class="transfer-progress mt-4">
+                <div class="flex items-center justify-between text-xs">
+                  <span>{{ transferProgress.label }}</span>
+                  <span>{{ transferProgress.percent }}%</span>
+                </div>
+                <div class="progress-track">
+                  <div class="progress-bar" :style="{ width: `${transferProgress.percent}%` }" />
+                </div>
+              </div>
             </div>
           </div>
         </section>
@@ -532,6 +631,33 @@ onMounted(async () => {
         </div>
       </DialogContent>
     </Dialog>
+    <Dialog :open="confirmOpen" @update:open="(v) => { if (!v) resolveConfirm(false) }">
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>{{ confirmTitle }}</DialogTitle>
+        </DialogHeader>
+        <p class="text-sm text-muted-foreground leading-6">{{ confirmMessage }}</p>
+        <DialogFooter>
+          <Button variant="outline" @click="resolveConfirm(false)">取消</Button>
+          <Button :disabled="actionLoading" @click="resolveConfirm(true)">确认</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+    <Dialog :open="messageDialogOpen" @update:open="messageDialogOpen = $event">
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle class="flex items-center gap-2">
+            <Check v-if="messageDialogType === 'success'" class="w-5 h-5 text-emerald-600" />
+            <CircleAlert v-else class="w-5 h-5 text-red-600" />
+            {{ messageDialogTitle }}
+          </DialogTitle>
+        </DialogHeader>
+        <p class="text-sm text-muted-foreground leading-6 break-words">{{ messageDialogMessage }}</p>
+        <DialogFooter>
+          <Button @click="messageDialogOpen = false">知道了</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   </div>
 </template>
 
@@ -591,6 +717,18 @@ table td {
 
 .upload-zone {
   @apply w-full min-h-36 rounded-xl border border-dashed flex flex-col items-center justify-center gap-2 transition-colors hover:bg-secondary hover:border-primary/40;
+}
+
+.transfer-progress {
+  @apply rounded-lg border bg-secondary/50 px-3 py-2 text-muted-foreground;
+}
+
+.progress-track {
+  @apply mt-2 h-2 overflow-hidden rounded-full bg-background;
+}
+
+.progress-bar {
+  @apply h-full rounded-full bg-primary transition-all duration-500;
 }
 
 .password-field {
