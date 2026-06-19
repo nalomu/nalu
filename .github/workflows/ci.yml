@@ -80,6 +80,9 @@ jobs:
 
       - run: pnpm install
 
+      - name: Initialize Tauri Android project
+        run: pnpm exec tauri android init
+
       - name: Build Android (debug)
         working-directory: src-tauri/gen/android
         run: ./gradlew assembleArm64Debug
