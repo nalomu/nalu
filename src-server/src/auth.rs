@@ -4,7 +4,7 @@ use axum::{
     middleware::Next,
     response::{Json, Response},
 };
-use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
+use jsonwebtoken::{DecodingKey, EncodingKey, Header, Validation, decode, encode};
 use nalu_shared::device::{DeviceClaims, PairingRequest, PairingResponse};
 use serde_json::json;
 use uuid::Uuid;

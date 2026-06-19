@@ -4,7 +4,7 @@ mod db;
 mod routes;
 mod state;
 
-use axum::{middleware, Router};
+use axum::{Router, middleware};
 use tower_http::cors::CorsLayer;
 
 #[tokio::main]
@@ -22,15 +22,15 @@ async fn main() {
     tracing::info!("Data dir: {}", config.data_dir.display());
     tracing::info!("Pairing code: {}", config.pairing_code);
 
-    let app_state = state::AppState::new(&config).await
+    let app_state = state::AppState::new(&config)
+        .await
         .expect("Failed to initialize server state");
 
     let public = routes::public_router();
-    let protected = routes::protected_router()
-        .route_layer(middleware::from_fn_with_state(
-            app_state.clone(),
-            auth::auth_middleware,
-        ));
+    let protected = routes::protected_router().route_layer(middleware::from_fn_with_state(
+        app_state.clone(),
+        auth::auth_middleware,
+    ));
 
     let app: Router = Router::new()
         .merge(public)

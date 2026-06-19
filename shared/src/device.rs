@@ -21,7 +21,7 @@ pub struct PairingResponse {
 /// JWT claims embedded in auth tokens.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeviceClaims {
-    pub sub: String,       // device_id
+    pub sub: String, // device_id
     pub device_name: String,
     pub iat: usize,
     pub exp: usize,

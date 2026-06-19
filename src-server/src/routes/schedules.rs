@@ -1,8 +1,8 @@
 use axum::{
+    Json, Router,
     extract::{Path, State},
     http::StatusCode,
     routing::{get, put},
-    Json, Router,
 };
 use nalu_shared::models::Schedule;
 use serde::Deserialize;
@@ -20,7 +20,10 @@ pub struct AddScheduleRequest {
 pub fn router() -> Router<SharedState> {
     Router::new()
         .route("/schedules", get(get_schedules).post(add_schedule))
-        .route("/schedules/{id}", put(toggle_schedule).delete(delete_schedule_handler))
+        .route(
+            "/schedules/{id}",
+            put(toggle_schedule).delete(delete_schedule_handler),
+        )
 }
 
 async fn get_schedules(
@@ -91,10 +94,7 @@ async fn delete_schedule_handler(
 ) -> Result<StatusCode, (StatusCode, String)> {
     let conn = state::lock_db(&state.db)?;
     let affected = conn
-        .execute(
-            "DELETE FROM schedules WHERE id = ?1",
-            rusqlite::params![id],
-        )
+        .execute("DELETE FROM schedules WHERE id = ?1", rusqlite::params![id])
         .map_err(|e| (e500(), e.to_string()))?;
     if affected == 0 {
         return Err((StatusCode::NOT_FOUND, "Schedule not found".to_string()));

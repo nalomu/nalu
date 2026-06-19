@@ -17,6 +17,9 @@ target/
 *.keystore
 *.jks
 
+# Server runtime data
+data/
+
 docs/.vuepress/dist/
 docs/.vuepress/.cache/
 docs/.vuepress/.temp/

@@ -46,6 +46,25 @@ jobs:
 
       - run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
 
+  server:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            shared
+            src-server
+
+      - run: cargo check -p nalu-server
+
+      - run: cargo clippy -p nalu-server -- -D warnings
+
+      - run: cargo fmt -p nalu-server --check
+
   android:
     runs-on: ubuntu-latest
     steps:

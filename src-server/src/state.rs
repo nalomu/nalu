@@ -28,12 +28,11 @@ impl AppState {
 }
 
 use axum::http::StatusCode;
-use std::sync::MutexGuard;
 use rusqlite::Connection;
+use std::sync::MutexGuard;
 
 /// Helper: lock the DB mutex and convert PoisonError to a (StatusCode, String) error.
-pub fn lock_db(
-    db: &DbConn,
-) -> Result<MutexGuard<'_, Connection>, (StatusCode, String)> {
-    db.lock().map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+pub fn lock_db(db: &DbConn) -> Result<MutexGuard<'_, Connection>, (StatusCode, String)> {
+    db.lock()
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
 }

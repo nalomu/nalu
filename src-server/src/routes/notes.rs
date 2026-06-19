@@ -1,8 +1,8 @@
 use axum::{
+    Json, Router,
     extract::{Path, State},
     http::StatusCode,
     routing::{get, put},
-    Json, Router,
 };
 use nalu_shared::models::Note;
 use serde::Deserialize;

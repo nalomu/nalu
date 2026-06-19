@@ -1,12 +1,7 @@
-use axum::{
-    extract::State,
-    http::StatusCode,
-    routing::post,
-    Json, Router,
-};
+use axum::{Json, Router, extract::State, http::StatusCode, routing::post};
 use nalu_shared::sync_protocol::{
-    OP_DELETE, OP_INSERT, OP_UPDATE, SYNC_TABLES,
-    ChangelogEntry, SyncAck, SyncPullRequest, SyncPullResponse, SyncPushRequest, SyncPushResponse,
+    ChangelogEntry, OP_DELETE, OP_INSERT, OP_UPDATE, SYNC_TABLES, SyncAck, SyncPullRequest,
+    SyncPullResponse, SyncPushRequest, SyncPushResponse,
 };
 
 use crate::state::{self, SharedState};
@@ -51,21 +46,21 @@ async fn push(
                 )
                 .ok();
 
-            if let Some((operation, payload, ts)) = latest_payload {
-                if ts > req.last_server_ts {
-                    // Server version is newer — conflict, send server version back
-                    conflicts.push(ChangelogEntry {
-                        id: entry.id,
-                        table_name: entry.table_name.clone(),
-                        row_id: entry.row_id.clone(),
-                        operation,
-                        payload,
-                        client_ts: ts,
-                        server_ts: Some(ts),
-                        synced: false,
-                    });
-                    continue; // Don't apply this client entry
-                }
+            if let Some((operation, payload, ts)) = latest_payload
+                && ts > req.last_server_ts
+            {
+                // Server version is newer — conflict, send server version back
+                conflicts.push(ChangelogEntry {
+                    id: entry.id,
+                    table_name: entry.table_name.clone(),
+                    row_id: entry.row_id.clone(),
+                    operation,
+                    payload,
+                    client_ts: ts,
+                    server_ts: Some(ts),
+                    synced: false,
+                });
+                continue; // Don't apply this client entry
             }
         }
 
@@ -147,7 +142,10 @@ async fn pull(
     }))
 }
 
-fn apply_entry(conn: &rusqlite::Connection, entry: &ChangelogEntry) -> Result<(), (StatusCode, String)> {
+fn apply_entry(
+    conn: &rusqlite::Connection,
+    entry: &ChangelogEntry,
+) -> Result<(), (StatusCode, String)> {
     if !SYNC_TABLES.contains(&entry.table_name.as_str()) {
         return Ok(());
     }
@@ -197,7 +195,9 @@ fn upsert_row(
         set_clauses.push(format!("{} = ?", key));
         values.push(match value {
             serde_json::Value::String(s) => Box::new(s.clone()) as Box<dyn rusqlite::types::ToSql>,
-            serde_json::Value::Number(n) if n.is_i64() => Box::new(n.as_i64().unwrap()) as Box<dyn rusqlite::types::ToSql>,
+            serde_json::Value::Number(n) if n.is_i64() => {
+                Box::new(n.as_i64().unwrap()) as Box<dyn rusqlite::types::ToSql>
+            }
             serde_json::Value::Bool(b) => Box::new(*b as i32) as Box<dyn rusqlite::types::ToSql>,
             _ => Box::new(value.to_string()) as Box<dyn rusqlite::types::ToSql>,
         });
@@ -214,7 +214,8 @@ fn upsert_row(
     // Build params: setters first, then row_id for WHERE clause
     let mut all_params: Vec<Box<dyn rusqlite::types::ToSql>> = values;
     all_params.push(Box::new(row_id.to_string()) as Box<dyn rusqlite::types::ToSql>);
-    let params_refs: Vec<&dyn rusqlite::types::ToSql> = all_params.iter().map(|v| v.as_ref()).collect();
+    let params_refs: Vec<&dyn rusqlite::types::ToSql> =
+        all_params.iter().map(|v| v.as_ref()).collect();
     let affected = conn
         .execute(&sql, rusqlite::params_from_iter(params_refs.iter()))
         .map_err(|e| (status::ise(), e.to_string()))?;
@@ -231,9 +232,15 @@ fn upsert_row(
         for key in &columns {
             let value = &fields[key];
             insert_values.push(match value {
-                serde_json::Value::String(s) => Box::new(s.clone()) as Box<dyn rusqlite::types::ToSql>,
-                serde_json::Value::Number(n) if n.is_i64() => Box::new(n.as_i64().unwrap()) as Box<dyn rusqlite::types::ToSql>,
-                serde_json::Value::Bool(b) => Box::new(*b as i32) as Box<dyn rusqlite::types::ToSql>,
+                serde_json::Value::String(s) => {
+                    Box::new(s.clone()) as Box<dyn rusqlite::types::ToSql>
+                }
+                serde_json::Value::Number(n) if n.is_i64() => {
+                    Box::new(n.as_i64().unwrap()) as Box<dyn rusqlite::types::ToSql>
+                }
+                serde_json::Value::Bool(b) => {
+                    Box::new(*b as i32) as Box<dyn rusqlite::types::ToSql>
+                }
                 _ => Box::new(value.to_string()) as Box<dyn rusqlite::types::ToSql>,
             });
         }
@@ -245,9 +252,13 @@ fn upsert_row(
             placeholders.join(", ")
         );
 
-        let insert_params: Vec<&dyn rusqlite::types::ToSql> = insert_values.iter().map(|v| v.as_ref()).collect();
-        conn.execute(&insert_sql, rusqlite::params_from_iter(insert_params.iter()))
-            .map_err(|e| (status::ise(), e.to_string()))?;
+        let insert_params: Vec<&dyn rusqlite::types::ToSql> =
+            insert_values.iter().map(|v| v.as_ref()).collect();
+        conn.execute(
+            &insert_sql,
+            rusqlite::params_from_iter(insert_params.iter()),
+        )
+        .map_err(|e| (status::ise(), e.to_string()))?;
     }
 
     Ok(())
@@ -255,7 +266,10 @@ fn upsert_row(
 
 fn sync_key_column(table_name: &str) -> Result<&'static str, (StatusCode, String)> {
     if !SYNC_TABLES.contains(&table_name) {
-        return Err((StatusCode::BAD_REQUEST, format!("Unsupported sync table: {}", table_name)));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            format!("Unsupported sync table: {}", table_name),
+        ));
     }
     Ok(match table_name {
         "task_groups" => "project",
@@ -271,7 +285,10 @@ fn validate_identifier(identifier: &str) -> Result<(), (StatusCode, String)> {
     if valid {
         Ok(())
     } else {
-        Err((StatusCode::BAD_REQUEST, format!("Invalid sync payload field: {}", identifier)))
+        Err((
+            StatusCode::BAD_REQUEST,
+            format!("Invalid sync payload field: {}", identifier),
+        ))
     }
 }
 
@@ -367,9 +384,11 @@ mod tests {
         .unwrap();
 
         let count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM task_groups WHERE project = 'work'", [], |row| {
-                row.get(0)
-            })
+            .query_row(
+                "SELECT COUNT(*) FROM task_groups WHERE project = 'work'",
+                [],
+                |row| row.get(0),
+            )
             .unwrap();
         assert_eq!(count, 0);
     }
@@ -379,13 +398,15 @@ mod tests {
         let conn = test_conn();
 
         assert!(upsert_row(&conn, "unknown", "1", r#"{"id":"1"}"#).is_err());
-        assert!(upsert_row(
-            &conn,
-            "task_columns",
-            "1",
-            r#"{"id":"1","name = 'x' --":"bad"}"#
-        )
-        .is_err());
+        assert!(
+            upsert_row(
+                &conn,
+                "task_columns",
+                "1",
+                r#"{"id":"1","name = 'x' --":"bad"}"#
+            )
+            .is_err()
+        );
     }
 }
 

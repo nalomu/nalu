@@ -3,7 +3,7 @@ pub mod schedules;
 pub mod sync;
 pub mod tasks;
 
-use axum::{routing::get, Router};
+use axum::{Router, routing::get};
 
 use crate::state::SharedState;
 

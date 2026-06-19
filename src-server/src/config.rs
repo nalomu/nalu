@@ -26,28 +26,34 @@ pub fn load() -> Config {
 
     std::fs::create_dir_all(&data_dir).ok();
 
-    let pairing_code = std::env::var("NALU_SERVER_PAIRING_CODE").unwrap_or_else(|_| {
-        // Generate a random 6-digit code on first run if not set
-        let code_path = data_dir.join("pairing_code.txt");
-        if code_path.exists() {
-            std::fs::read_to_string(&code_path).unwrap_or_else(|_| generate_code())
-        } else {
-            let code = generate_code();
-            let _ = std::fs::write(&code_path, &code);
-            code
-        }
-    }).trim().to_string();
+    let pairing_code = std::env::var("NALU_SERVER_PAIRING_CODE")
+        .unwrap_or_else(|_| {
+            // Generate a random 6-digit code on first run if not set
+            let code_path = data_dir.join("pairing_code.txt");
+            if code_path.exists() {
+                std::fs::read_to_string(&code_path).unwrap_or_else(|_| generate_code())
+            } else {
+                let code = generate_code();
+                let _ = std::fs::write(&code_path, &code);
+                code
+            }
+        })
+        .trim()
+        .to_string();
 
-    let jwt_secret = std::env::var("NALU_SERVER_JWT_SECRET").unwrap_or_else(|_| {
-        let secret_path = data_dir.join("jwt_secret.txt");
-        if secret_path.exists() {
-            std::fs::read_to_string(&secret_path).unwrap_or_else(|_| generate_secret())
-        } else {
-            let secret = generate_secret();
-            let _ = std::fs::write(&secret_path, &secret);
-            secret
-        }
-    }).trim().to_string();
+    let jwt_secret = std::env::var("NALU_SERVER_JWT_SECRET")
+        .unwrap_or_else(|_| {
+            let secret_path = data_dir.join("jwt_secret.txt");
+            if secret_path.exists() {
+                std::fs::read_to_string(&secret_path).unwrap_or_else(|_| generate_secret())
+            } else {
+                let secret = generate_secret();
+                let _ = std::fs::write(&secret_path, &secret);
+                secret
+            }
+        })
+        .trim()
+        .to_string();
 
     Config {
         port,
