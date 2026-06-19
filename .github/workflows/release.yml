@@ -87,15 +87,12 @@ jobs:
 
       - run: pnpm install
 
-      - name: Initialize Tauri Android project
-        run: pnpm exec tauri android init
-
       - name: Decode release keystore
         run: |
           echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > $RUNNER_TEMP/release.keystore
 
       - name: Build Android release APK
-        run: pnpm exec tauri android build --apk --target aarch64-linux-android
+        run: pnpm exec tauri android build --apk --target aarch64
         env:
           NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/27.0.12077973
           ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/release.keystore
@@ -110,3 +107,48 @@ jobs:
           draft: true
           files: |
             src-tauri/gen/android/app/build/outputs/apk/**/*.apk
+
+  build-server:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            name: linux-x86_64
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            name: macos-arm64
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            name: macos-x86_64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            name: windows-x86_64
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            .
+            shared
+            src-server
+
+      - name: Build server
+        run: cargo build -p nalu-server --release --target ${{ matrix.target }}
+
+      - name: Upload server binary to release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          files: |
+            target/${{ matrix.target }}/release/nalu-server
+            target/${{ matrix.target }}/release/nalu-server.exe

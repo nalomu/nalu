@@ -80,11 +80,7 @@ jobs:
 
       - run: pnpm install
 
-      - name: Initialize Tauri Android project
-        run: pnpm exec tauri android init
-
       - name: Build Android (debug)
-        working-directory: src-tauri/gen/android
-        run: ./gradlew assembleArm64Debug
+        run: pnpm exec tauri android build --target aarch64
         env:
           NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/27.0.12077973
