@@ -323,6 +323,11 @@ A "group" is identified by its `project` name (a string). The default group is n
   Example:
   [ACTION] {{"command":"delete_task_group","params":{{"project":"shopping"}}}} [/ACTION]
 
+- complete_task_group: Mark every incomplete task in a group as completed.
+  Params: project (string, required)
+  Example:
+  [ACTION] {{"command":"complete_task_group","params":{{"project":"work"}}}} [/ACTION]
+
 - copy_task_group: Duplicate a group, copying only its incomplete tasks.
   Params: project (string, required)
   Example:
@@ -364,7 +369,7 @@ Each group contains columns (like "重要", "一般"). Columns hold tasks and ca
 
 ### Schedules
 - add_schedule: Create a new scheduled event.
-  Params: title (string, required), scheduledAt (string, required — ISO 8601 local datetime like "2026-06-08T15:30:00"), reminderMinutes (number, optional — defaults to 5)
+  Params: title (string, required), scheduledAt (string, required — ISO 8601 local datetime like "2026-06-08T15:30:00"), reminderMinutes (number, optional — defaults to 0, no reminder)
   Example:
   [ACTION] {{"command":"add_schedule","params":{{"title":"Dentist appointment","scheduledAt":"2026-06-10T09:30:00","reminderMinutes":15}}}} [/ACTION]
 

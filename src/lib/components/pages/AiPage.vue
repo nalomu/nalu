@@ -40,6 +40,7 @@ const ACTION_LABELS = {
   delete_task: 'Task deleted',
   create_task_group: 'Group created',
   delete_task_group: 'Group deleted',
+  complete_task_group: 'Group completed',
   copy_task_group: 'Group copied',
   rename_task_group: 'Group renamed',
   rename_column: 'Column renamed',
@@ -72,7 +73,7 @@ const CONTEXT_LIMITS: Record<ContextKey, number> = {
   alarms: 20
 }
 
-const ACTION_PATTERN = /\[ACTION\]\s*(\{[\s\S]*?\})\s*\[\/ACTION\]/g
+const ACTION_PATTERN = new RegExp(String.raw`\[ACTION]\s*({[\s\S]*?})\s*\[/ACTION]`, 'g')
 const MAX_ACTIONS_PER_RESPONSE = 20
 const MAX_PROMPT_STRING_LENGTH = 500
 const MAX_ACTION_RESULT_LENGTH = 600
@@ -172,7 +173,10 @@ async function parseActions(content: string) {
 
     try {
       const parsed = JSON.parse(match[1])
-      if (!isPlainRecord(parsed)) throw new Error('Invalid action payload')
+      if (!isPlainRecord(parsed)) {
+        results.push({ command, params, success: false, result: 'Invalid action payload' })
+        continue
+      }
 
       command = String(parsed.command ?? 'unknown')
       if (!isAiActionCommand(parsed.command)) {
@@ -181,7 +185,8 @@ async function parseActions(content: string) {
       }
 
       if (parsed.params !== undefined && !isPlainRecord(parsed.params)) {
-        throw new Error('Action params must be an object')
+        results.push({ command, params, success: false, result: 'Action params must be an object' })
+        continue
       }
 
       command = parsed.command

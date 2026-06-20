@@ -42,7 +42,7 @@ pub fn init(path: &std::path::Path) -> Result<(), String> {
             id TEXT PRIMARY KEY,
             title TEXT NOT NULL,
             scheduled_at TEXT NOT NULL,
-            reminder_minutes INTEGER NOT NULL DEFAULT 5,
+            reminder_minutes INTEGER NOT NULL DEFAULT 0,
             done INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL DEFAULT (datetime('now'))
         );
@@ -85,6 +85,7 @@ pub fn init(path: &std::path::Path) -> Result<(), String> {
 
     // Run kanban board migration
     migrate_kanban_schema(&conn)?;
+    migrate_task_schedule_schema(&conn)?;
 
     // Run alarm migrations
     migrate_alarm_skip_next(&conn)?;
@@ -165,6 +166,68 @@ fn migrate_kanban_schema(conn: &Connection) -> Result<(), String> {
     }
 
     sync_task_groups(conn)?;
+
+    Ok(())
+}
+
+/// Idempotent migration for calendar-backed tasks.
+fn migrate_task_schedule_schema(conn: &Connection) -> Result<(), String> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS recurrence_series (
+            id TEXT PRIMARY KEY,
+            repeat_type TEXT NOT NULL DEFAULT 'none',
+            title TEXT NOT NULL DEFAULT '',
+            start_at TEXT NOT NULL,
+            end_at TEXT NOT NULL,
+            active INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );",
+    )
+    .map_err(|e| e.to_string())?;
+
+    let columns = [
+        ("scheduled_start_at", "TEXT"),
+        ("scheduled_end_at", "TEXT"),
+        ("reminder_minutes", "INTEGER NOT NULL DEFAULT 0"),
+        ("completed_at", "TEXT"),
+        ("repeat_type", "TEXT NOT NULL DEFAULT 'none'"),
+        ("recurrence_series_id", "TEXT"),
+        ("recurrence_sequence", "INTEGER"),
+        ("recurrence_origin_at", "TEXT"),
+        ("recurrence_detached", "INTEGER NOT NULL DEFAULT 0"),
+    ];
+
+    for (name, definition) in columns {
+        if conn
+            .prepare(&format!("SELECT {name} FROM tasks LIMIT 1"))
+            .is_err()
+        {
+            conn.execute_batch(&format!(
+                "ALTER TABLE tasks ADD COLUMN {name} {definition};"
+            ))
+            .map_err(|e| e.to_string())?;
+        }
+    }
+
+    if conn
+        .prepare("SELECT active FROM recurrence_series LIMIT 1")
+        .is_err()
+    {
+        conn.execute_batch(
+            "ALTER TABLE recurrence_series ADD COLUMN active INTEGER NOT NULL DEFAULT 1;",
+        )
+        .map_err(|e| e.to_string())?;
+    }
+
+    conn.execute_batch(
+        "CREATE INDEX IF NOT EXISTS idx_tasks_scheduled_start_at ON tasks (scheduled_start_at);
+         CREATE INDEX IF NOT EXISTS idx_tasks_recurrence_series_id ON tasks (recurrence_series_id);
+         CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_recurrence_unique
+            ON tasks (recurrence_series_id, recurrence_sequence)
+            WHERE recurrence_series_id IS NOT NULL AND recurrence_sequence IS NOT NULL;",
+    )
+    .map_err(|e| e.to_string())?;
 
     Ok(())
 }

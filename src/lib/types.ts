@@ -1,3 +1,5 @@
+export type RepeatType = 'none' | 'daily' | 'weekly' | 'monthly' | 'yearly';
+
 export interface Task {
   id: string;
   project: string;
@@ -8,6 +10,15 @@ export interface Task {
   position: number;
   created_at: string;
   updated_at: string;
+  scheduled_start_at: string | null;
+  scheduled_end_at: string | null;
+  reminder_minutes: number;
+  completed_at: string | null;
+  repeat_type: RepeatType;
+  recurrence_series_id: string | null;
+  recurrence_sequence: number | null;
+  recurrence_origin_at: string | null;
+  recurrence_detached: boolean;
 }
 
 export interface TaskColumn {
