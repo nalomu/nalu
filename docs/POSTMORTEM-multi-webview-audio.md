@@ -1,7 +1,8 @@
 # 复盘：番茄钟 / 闹钟通知系统与多 WebView 音频 Bug
 
 > 日期：2026-06-07
-> 涉及文件：`pomodoro.rs`、`alarm.rs`、`+layout.svelte`、`notifications.ts`、`alertSound.ts`
+> 历史背景：本文记录的是迁移到 Vue 3 之前的旧前端实现。当前主线是 Tauri 2 + Vue 3 + Vue Router + Pinia，旧文件名仅用于说明当时的故障现场。
+> 当前对应：Rust 侧仍是 `pomodoro.rs` / `alarm.rs`，前端全局副作用应落在 Vue 应用入口、Pinia store、组合式函数或明确限定窗口的页面组件中。
 
 ---
 
@@ -23,9 +24,9 @@
 
 ### 第二轮：发现不在当前页面不会响
 
-原因：通知逻辑写在 `PomodoroPage.svelte` 和 `AlarmPage.svelte` 里，组件销毁后监听器就没了。
+原因：通知逻辑写在旧页面组件里，组件销毁后监听器就没了。
 
-修复：把通知监听搬到 `+layout.svelte`，通过 `initGlobalNotifications()` 全局注册一次。番茄钟的计时逻辑也移到 Rust 后端（`pomodoro.rs` 后台任务），避免 WebView 隐藏时 JS 被节流导致定时器失效。
+修复：把通知监听搬到应用级入口，通过 `initGlobalNotifications()` 全局注册一次。番茄钟的计时逻辑也移到 Rust 后端（`pomodoro.rs` 后台任务），避免 WebView 隐藏时 JS 被节流导致定时器失效。
 
 **教训：依赖 WebView JS 定时器做后台任务不可靠，macOS 会冻结隐藏 WebView 的 `setInterval`/`setTimeout`。**
 
@@ -51,13 +52,13 @@
 
 变小 = 停了一个还剩一个。说明有**两个独立的音频实例**在播放。
 
-**根因**：Tauri 的 `app.emit()` 会广播到所有 WebView。应用有两个窗口——主窗口（main）和剪贴板弹窗（clipboard-popup）。`+layout.svelte` 在两个窗口中都会执行，导致两个 WebView 各自注册了事件监听、各自创建了 `AudioContext`。用户点"关闭"只停了主窗口的音频，clipboard-popup 窗口的音频成了孤儿。
+**根因**：Tauri 的 `app.emit()` 会广播到所有 WebView。应用有两个窗口——主窗口（main）和剪贴板弹窗（clipboard-popup）。旧应用级布局代码会在两个窗口中都执行，导致两个 WebView 各自注册了事件监听、各自创建了 `AudioContext`。用户点"关闭"只停了主窗口的音频，clipboard-popup 窗口的音频成了孤儿。
 
 修复：
 1. **Rust 端**：`pomodoro.rs` 和 `alarm.rs` 的 `emit()` 改为 `emit_to("main", ...)`，事件只发给主窗口
-2. **前端**：`+layout.svelte` 加路由守卫 `page.url.pathname === "/"`，只在主页面初始化通知监听
+2. **前端**：应用级通知初始化加主窗口/主路由守卫，只在主页面初始化通知监听
 
-**教训：Tauri 多窗口应用中，`+layout.svelte` / `App.svelte` 级别的全局代码会在每个 WebView 中执行。任何"全局"副作用（事件监听、音频、WebSocket）都必须判断自己是否在目标窗口中运行。**
+**教训：Tauri 多窗口应用中，应用入口、根组件、全局 store 或组合式函数里的副作用可能在每个 WebView 中执行。任何"全局"副作用（事件监听、音频、WebSocket）都必须判断自己是否在目标窗口中运行。**
 
 ---
 
@@ -74,7 +75,7 @@
 
 ### 2. 多 WebView 全局代码陷阱
 
-SvelteKit 的 `+layout.svelte`、`+layout.ts`、`App.svelte` 中的顶层代码会在**每个 WebView 窗口**中执行。常见坑：
+Tauri 多窗口里，前端框架的应用入口、根组件、全局 store 初始化和组合式函数副作用都可能在**每个 WebView 窗口**中执行。常见坑：
 
 - 全局事件监听重复注册（每个窗口各一份）
 - `AudioContext` 重复创建（每个窗口各一份，互不干扰，关一个另一个还在响）
@@ -83,28 +84,22 @@ SvelteKit 的 `+layout.svelte`、`+layout.ts`、`App.svelte` 中的顶层代码�
 
 **防御方式**：在产生副作用前判断环境。
 
-```svelte
-<!-- 用路由判断（推荐，不依赖 Tauri API） -->
-<script>
-  import { page } from "$app/state";
-  $effect(() => {
-    if (page.url.pathname === "/") {
-      initGlobalNotifications();
-    }
-  });
-</script>
+```ts
+// 用路由判断（不依赖 Tauri API）
+router.afterEach((to) => {
+  if (to.path === "/") {
+    initGlobalNotifications();
+  }
+});
 ```
 
-```svelte
-<!-- 用窗口 label 判断（需要 mock，E2E 测试要补 label） -->
-<script>
-  import { getCurrentWindow } from "@tauri-apps/api/window";
-  $effect(() => {
-    if (getCurrentWindow().label === "main") {
-      initGlobalNotifications();
-    }
-  });
-</script>
+```ts
+// 用窗口 label 判断（需要 mock，E2E 测试要补 label）
+import { getCurrentWindow } from "@tauri-apps/api/window";
+
+if (getCurrentWindow().label === "main") {
+  initGlobalNotifications();
+}
 ```
 
 路由判断更健壮，因为它不依赖 Tauri 运行时 API，E2E 测试的 mock 也更简单。
@@ -180,8 +175,6 @@ Playwright 主要面向单页面测试。虽然可以通过 `context.newPage()` 
 |------|------|
 | `src-tauri/src/commands/alarm.rs` | 闹钟 CRUD + 后台检查器（每 10s 检查，`emit_to("main")`） |
 | `src-tauri/src/commands/pomodoro.rs` | 番茄钟计时器（后台任务，`emit_to("main")`） |
-| `src/routes/+layout.svelte` | 全局布局，路由守卫控制通知初始化 |
-| `src/lib/utils/notifications.ts` | 全局事件监听（番茄钟 + 闹钟），`fireAlarm` 含去重和代际保护 |
-| `src/lib/utils/alertSound.ts` | Web Audio 音频引擎，代际计数器 + `AudioContext.close()` |
-| `src/lib/stores/alertStore.ts` | 弹窗状态 store |
-| `src/lib/components/AlertModal.svelte` | 弹窗 UI 组件 |
+| `src/App.vue` / `src/main.ts` | 当前 Vue 主线的应用入口和根组件 |
+| `src/lib/stores/alertStore.ts` | 弹窗状态 store，承载当前主线的提醒状态 |
+| `src/lib/components/AlertModal.vue` | 弹窗 UI 组件 |

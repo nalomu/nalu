@@ -105,8 +105,9 @@ nalomu-uni-platform/
 │   ├── lib/
 │   │   ├── components/        # 通用 UI 组件
 │   │   ├── stores/            # Pinia stores（全局状态）
-│   │   ├── plugins/           # 内置插件前端
-│   │   └── utils/             # 工具函数
+│   │   ├── composables/        # Vue 组合式逻辑
+│   │   ├── i18n/              # 多语言文本
+│   │   └── types.ts           # 前端共享类型
 │   ├── router.ts              # Vue Router hash 路由
 │   ├── App.vue                # 根组件
 │   └── main.ts                # 入口
@@ -124,35 +125,33 @@ nalomu-uni-platform/
 │   │   │   └── ai.rs          # AI 聊天（多 Provider/推理/[ACTION]）
 │   │   ├── db/                # 数据库层
 │   │   │   ├── mod.rs
-│   │   │   ├── migrations.rs  # SQLite 迁移
-│   │   │   └── models.rs     # 数据模型
-│   │   ├── plugins/           # 插件系统
-│   │   │   ├── mod.rs
-│   │   │   ├── loader.rs     # 插件加载
-│   │   │   ├── registry.rs   # 命令注册表
-│   │   │   └── runtime.rs    # 插件运行时
-│   │   └── sync/              # 同步引擎（V2）
+│   │   │   └── database.rs    # SQLite 初始化和访问
+│   │   └── sync/              # 桌面端同步客户端
 │   │       ├── mod.rs
-│   │       └── crdt.rs       # Automerge 集成
+│   │       ├── client.rs
+│   │       └── changelog.rs
 │   ├── Cargo.toml             # Rust 依赖
 │   ├── tauri.conf.json        # Tauri 配置
 │   └── capabilities/          # 权限配置
-├── plugins/                   # 插件开发目录
-│   ├── nalu-clipboard/        # 内置：剪贴板管理
-│   ├── nalu-mysql/            # 内置：MySQL 导入导出
-│   ├── nalu-pomodoro/         # 内置：番茄钟
-│   ├── nalu-ai/               # 内置：AI 助手
-│   └── README.md              # 插件开发指南
-├── mobile/                    # 移动端（V2 阶段）
-├── relay-server/              # 同步中继服务（V2 阶段）
+├── shared/                    # 共享协议、模型、同步契约（Rust crate）
+│   └── src/
+├── src-server/                # 私有同步中继服务（Axum）
+│   └── src/
+├── plugins/                   # 插件开发目录（预留）
+├── scripts/                   # 文档截图和项目脚本
 ├── package.json
 ├── pnpm-lock.yaml
-├── svelte.config.js
-├── vite.config.ts
+├── pnpm-workspace.yaml
+├── vite.config.js
 ├── tsconfig.json
-├── tailwind.config.ts
+├── vitest.config.js
 └── README.md
 ```
+
+移动端正式工程暂不放进当前主线结构。后续需要 Android 时，优先在 `mobile/android/`
+新增 Kotlin / Jetpack Compose 原生端；iOS 在 `mobile/ios/` 预留 Swift / SwiftUI
+方向。移动端与桌面端共享协议、数据模型、同步规则、错误码和设计 token，不共享 Vue UI
+或桌面端 Rust Core。
 
 ---
 
@@ -205,11 +204,18 @@ tauri-build = { version = "2", features = [] }
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "check": "svelte-check --tsconfig ./tsconfig.json",
-    "tauri": "tauri"
+    "check": "vue-tsc --noEmit",
+    "test": "vitest run",
+    "test:e2e": "playwright test",
+    "docs:dev": "vuepress dev docs",
+    "docs:build": "vuepress build docs",
+    "tauri:dev": "tauri dev",
+    "tauri:dev:android": "tauri android dev",
+    "tauri:build": "tauri build"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.11.0",
+    "@tauri-apps/plugin-autostart": "^2.5.1",
     "@tauri-apps/plugin-notification": "^2.3.3",
     "@tauri-apps/plugin-shell": "^2.3.5",
     "@tauri-apps/plugin-clipboard-manager": "^2.3.2",
@@ -221,19 +227,25 @@ tauri-build = { version = "2", features = [] }
     "@milkdown/core": "^7.21.2",
     "@milkdown/preset-commonmark": "^7.21.2",
     "@milkdown/plugin-listener": "^7.21.2",
-    "lucide-svelte": "^0.400.0"
+    "lucide-vue-next": "^0.468.0",
+    "pinia": "^3.0.3",
+    "tailwindcss": "^4.3.0",
+    "vue": "^3.5.13",
+    "vue-router": "^4.5.0"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.11.2",
-    "svelte": "^5.56.2",
-    "vite": "^8.0.16",
-    "typescript": "^6.0.3",
-    "tailwindcss": "^4.3.0",
+    "@vitejs/plugin-vue": "^5.2.1",
+    "@vuepress/bundler-vite": "2.0.0-rc.2",
+    "@vuepress/theme-default": "2.0.0-rc.2",
+    "@playwright/test": "^1.60.0",
+    "vite": "^6.0.3",
+    "typescript": "~5.6.2",
     "prettier": "^3",
-    "prettier-plugin-svelte": "^3",
     "eslint": "^9",
-    "vitest": "^3",
-    "svelte-check": "^4"
+    "vitest": "^4",
+    "vue-tsc": "^2.2.0",
+    "vuepress": "2.0.0-rc.2"
   }
 }
 ```
@@ -242,65 +254,60 @@ tauri-build = { version = "2", features = [] }
 
 ## 开发阶段规划（快速优先）
 
-### Phase 1：MVP 骨架（1-2 周）
+### Phase 1：桌面端主应用
 
-目标：跑通 Tauri + Svelte 项目，命令面板能弹出来。
+目标：继续以 Tauri 2 + Vue 3 + Rust 作为主线，优先把桌面端本地优先能力做扎实。
 
-- [ ] 环境准备：安装 Rust、升级 Node.js 到 22、安装 pnpm
-- [ ] `pnpm create tauri-app` 初始化项目（选 Svelte + TypeScript）
-- [ ] 集成 Tailwind CSS 4 + shadcn-svelte
-- [ ] 实现系统托盘 + 全局热键唤起
-- [ ] 实现命令面板基础 UI（搜索框 + 列表）
-- [ ] SQLite 初始化 + 基础 migration
+- [x] Vue 3 + Vue Router + Pinia + Tailwind CSS 4 主前端
+- [x] Tauri 2 桌面应用壳和 Rust command 层
+- [x] SQLite 本地数据基础
+- [x] 系统托盘、全局热键、剪贴板、通知等桌面能力
+- [ ] 继续完善任务、日程、笔记、番茄钟、剪贴板和 AI 助手入口
 
-### Phase 2：核心功能（3-4 周）
+### Phase 2：共享契约中心
 
-目标：内置插件全部可用。
+目标：把跨端真正需要共享的内容收敛到 `shared/`。
 
-- [ ] 剪贴板管理插件（记录历史、搜索、复制）
-- [ ] MySQL 导入导出插件（连接、执行 SQL、dump/restore）
-- [ ] 任务计划（项目分组、待办 CRUD、Markdown 编辑）
-- [ ] 备忘录/笔记（统一管理、标签分类）
-- [ ] 番茄钟（倒计时、休息提醒、系统通知）
-- [ ] 日程/闹钟（日历视图、定时通知）
+- [ ] 任务、笔记、日程等数据模型契约
+- [ ] 同步消息格式和冲突处理规则
+- [ ] 错误码、导入导出格式、加密/压缩规则
+- [ ] 设计 token，供 Vue、Compose、SwiftUI 各端映射
 
-### Phase 3：插件系统（2 周）
+### Phase 3：私有同步服务
 
-目标：可以自己写新插件加进来。
+目标：让桌面端和后续移动端通过同一套同步协议交换变更。
 
-- [ ] 插件 manifest 规范 + 加载器
-- [ ] 命令注册表（插件注册命令 → 命令面板可搜索）
-- [ ] 插件间通信（JSON-RPC over IPC）
-- [ ] 插件开发模板 + `nalu init` CLI
-- [ ] 热重载（开发模式）
+- [ ] `src-server/` 中继服务稳定化
+- [ ] WebSocket 同步通道
+- [ ] 设备身份、认证和重放策略
+- [ ] 离线变更补偿和日志清理
 
-### Phase 4：移动端同步（3-4 周）
+### Phase 4：Android 原生端
 
-目标：手机上能看到和编辑待办、笔记。
+目标：新开 Kotlin / Jetpack Compose 原生端，只接同步协议和移动端核心功能。
 
-- [ ] Automerge CRDT 集成到 Rust 后端
-- [ ] 中继服务（axum + WebSocket）
-- [ ] Tauri Mobile 打包 iOS/Android
-- [ ] 移动端 UI 适配（响应式或原生适配层）
-- [ ] AI 接入（Ollama 本地 + 云端 API 双模）
+- [ ] `mobile/android/` 工程
+- [ ] Room / SQLite 本地副本
+- [ ] 同步协议客户端
+- [ ] 通知、分享入口、快捷入口等 Android 原生能力
+
+### Phase 5：iOS 轻端
+
+目标：在桌面端和 Android 同步跑通后，再启动 SwiftUI 轻端。
+
+- [ ] 任务、笔记、日程查看和手动添加
+- [ ] Share Extension
+- [ ] Shortcuts
+- [ ] 同步查看收藏内容
 
 ---
 
-## 快速启动命令（环境就绪后）
+## 本仓库常用命令
 
 ```bash
-# 1. 创建项目
-pnpm create tauri-app nalu --template svelte-ts
-
-# 2. 进入项目
-cd nalu
-
-# 3. 安装依赖
-pnpm add @tauri-apps/api @tauri-apps/plugin-notification @tauri-apps/plugin-shell @tauri-apps/plugin-clipboard-manager @tauri-apps/plugin-global-shortcut @tauri-apps/plugin-store @tauri-apps/plugin-dialog @milkdown/core @milkdown/preset-commonmark lucide-svelte
-
-# 4. 安装开发依赖
-pnpm add -D tailwindcss prettier prettier-plugin-svelte vitest svelte-check
-
-# 5. 启动开发
-pnpm tauri dev
+pnpm dev
+pnpm tauri:dev
+pnpm check
+pnpm test
+pnpm tauri:build
 ```

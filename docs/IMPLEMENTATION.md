@@ -402,21 +402,19 @@ src-tauri/src/
 
 ### 已修复的问题
 1. ~~rusqlite `params!` 宏生命周期错误~~ → 拆分 match arms
-2. ~~SvelteKit snippet 响应性失效~~ → 改用状态路由 SPA
+2. ~~旧前端响应性和路由状态问题~~ → 迁移为 Vue Router + Pinia SPA
 3. ~~`tokio::spawn` 在同步命令中无运行时~~ → 改用 `tauri::async_runtime::spawn`
 4. ~~lucide `Loader` 图标不存在~~ → 改用 `LoaderCircle`
-5. ~~Svelte 表达式中不能渲染组件~~ → 改用 `{#if}` 块
 
 ### 当前限制
 1. 剪贴板文件支持仅限路径存储，不支持文件内容深拷贝
 2. 图片复制回剪贴板时，仅复制 data URL 文本（非原生图片）
-3. `svelte:component` 在 Runes 模式下已弃用（产生警告），后续可改为动态组件语法
-4. MySQL 导入依赖整个 SQL 文件加载到内存，大文件可能受限
-5. 闹钟和日程的通知检查在前端执行，关闭页面后停止工作（后续可移到 Rust 后台）
+3. MySQL 导入依赖整个 SQL 文件加载到内存，大文件可能受限
+4. 闹钟和日程的通知检查仍需持续关注多窗口和隐藏窗口生命周期，后台定时逻辑应优先放在 Rust 端
 
 ### 构建警告（非阻塞）
-- 多个 a11y 警告（`a11y_label_has_associated_control`、`a11y_click_events_have_key_events`）
-- `<svelte:component>` 弃用警告
+- Vue 模板和 TypeScript 类型检查以 `pnpm check` / `vue-tsc --noEmit` 为准
+- UI 可访问性问题以后续 Playwright 和组件测试补充覆盖
 
 ---
 
