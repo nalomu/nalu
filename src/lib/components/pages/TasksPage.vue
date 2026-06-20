@@ -1,15 +1,21 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
-import { Plus, Search, ChevronDown, ChevronRight, Trash2, MoreHorizontal, GripHorizontal, Circle, CheckCircle2, Copy, Pencil, ArrowLeft, ArrowRight } from 'lucide-vue-next'
+import { writeText } from '@tauri-apps/plugin-clipboard-manager'
+import { Plus, Search, ChevronDown, ChevronRight, Trash2, MoreHorizontal, GripHorizontal, Circle, CheckCircle2, Copy, Settings2, CalendarDays, X } from 'lucide-vue-next'
 import type { GroupData, Task, TaskColumn, ColumnWithTasks, TaskSnapshot, ColumnSnapshot } from '$lib/types'
 import { useMobile } from '$lib/composables/useMobile'
 import { useI18n } from '$lib/i18n'
 import { Input } from '$lib/components/ui/input'
 import { useAiRefresh } from '$lib/composables/useAiRefresh'
+import { useSettingsStore, type TaskGroupNamingStrategy } from '$lib/stores/settingsStore'
+import { legacyBrowserTasks } from '$lib/data/legacyBrowserTasks'
 import MobileTasksPage from './MobileTasksPage.vue'
 
-const { t } = useI18n()
+const settings = useSettingsStore()
+const { locale, t } = useI18n()
+const LOCAL_CALENDAR_TASKS_KEY = 'nalu-dev-calendar-tasks'
+const LOCAL_TASK_COLUMNS_KEY = 'nalu-dev-task-columns'
 
 const { isCompactWidth, isMobilePlatform } = useMobile()
 
@@ -18,10 +24,14 @@ const groups = ref<GroupData[]>([])
 const searchQuery = ref('')
 const collapsedGroups = ref<Record<string, boolean>>({})
 const savedCollapsedGroups = ref<Record<string, boolean>>({})
+const showFutureRecurring = ref(false)
+const showCompletedPastDateGroups = ref(false)
 
 // Task editing
 const editingTaskId = ref<string | null>(null)
 const editTaskTitle = ref('')
+const selectedTaskIds = ref<Set<string>>(new Set())
+const bulkMoveTargetColumnId = ref('')
 
 // Task adding per column (hover to show)
 const addingColumnId = ref<string | null>(null)
@@ -35,13 +45,12 @@ const savingNewGroup = ref(false)
 const editingGroupProject = ref<string | null>(null)
 const editGroupName = ref('')
 const savingGroupRename = ref(false)
+const groupSettingsOpen = ref(false)
+const groupMenuProject = ref<string | null>(null)
 
 // Column editing
 const editingColumnId = ref<string | null>(null)
 const editColumnName = ref('')
-const addingColumnProject = ref<string | null>(null)
-const newColumnName = ref('')
-const savingNewColumn = ref(false)
 
 // Drag state
 const draggedTask = ref<Task | null>(null)
@@ -56,8 +65,6 @@ const dropTargetNewColumn = ref<string | null>(null) // project for new column d
 const pointerTaskDrag = ref<{
   task: Task
   pointerId: number
-  element: HTMLElement
-  width: number
   startX: number
   startY: number
   active: boolean
@@ -65,8 +72,6 @@ const pointerTaskDrag = ref<{
 const pointerGroupDrag = ref<{
   project: string
   pointerId: number
-  element: HTMLElement
-  width: number
   startX: number
   startY: number
   active: boolean
@@ -74,23 +79,12 @@ const pointerGroupDrag = ref<{
 const pointerColumnDrag = ref<{
   column: TaskColumn
   pointerId: number
-  element: HTMLElement
-  width: number
   startX: number
   startY: number
   active: boolean
 } | null>(null)
-const dragPreview = ref<{
-  type: 'task' | 'column' | 'group'
-  title: string
-  subtitle?: string
-  x: number
-  y: number
-  width: number
-} | null>(null)
 let suppressTaskClickUntil = 0
 let suppressGroupClickUntil = 0
-const nonPassivePointerOptions: AddEventListenerOptions = { passive: false }
 
 // Toast / undo
 const toastMessage = ref('')
@@ -102,52 +96,12 @@ let toastTimer: ReturnType<typeof setTimeout> | null = null
 const columnMenuId = ref<string | null>(null)
 
 const isSearching = computed(() => searchQuery.value.trim().length > 0)
-const isPhoneTaskLayout = computed(() => isMobilePlatform.value && isCompactWidth.value)
-const mobileEditingTask = computed(() =>
-  isMobilePlatform.value && editingTaskId.value ? findTaskById(editingTaskId.value) : null,
-)
-const mobileEditingColumns = computed(() => {
-  const task = mobileEditingTask.value
-  if (!task) return [] as ColumnWithTasks[]
-  const group = groups.value.find((item) => item.columns.some((column) => column.column.id === task.column_id))
-  return group?.columns ?? []
-})
-const activeMobileColumns = ref<Record<string, string>>({})
-const mobileEditColumnId = ref('')
-const dragPreviewStyle = computed(() => {
-  const preview = dragPreview.value
-  if (!preview) return {}
-  return {
-    width: `${preview.width}px`,
-    transform: `translate3d(${preview.x}px, ${preview.y}px, 0)`,
-  }
-})
-
-function vibrate(pattern: number | number[]) {
-  if (!isMobilePlatform.value || typeof navigator === 'undefined' || !navigator.vibrate) return
-  try { navigator.vibrate(pattern) } catch {}
-}
-
-function startDragPreview(type: 'task' | 'column' | 'group', title: string, event: PointerEvent, width: number, subtitle?: string) {
-  dragPreview.value = {
-    type,
-    title,
-    subtitle,
-    x: event.clientX + 12,
-    y: event.clientY + 12,
-    width: Math.min(Math.max(width, 180), type === 'task' ? 280 : 240),
-  }
-}
-
-function moveDragPreview(event: PointerEvent) {
-  if (!dragPreview.value) return
-  dragPreview.value.x = event.clientX + 12
-  dragPreview.value.y = event.clientY + 12
-}
-
-function stopDragPreview() {
-  dragPreview.value = null
-}
+const groupNamingOptions: Array<{ id: TaskGroupNamingStrategy; label: string }> = [
+  { id: 'date', label: 'tasks.groupNamingDate' },
+  { id: 'dateWeekday', label: 'tasks.groupNamingDateWeekday' },
+  { id: 'monthDay', label: 'tasks.groupNamingMonthDay' },
+  { id: 'defaultName', label: 'tasks.groupNamingDefaultName' },
+]
 
 // Column width: fit up to 3 columns; 4+ columns scroll horizontally.
 function columnStyle(colCount: number) {
@@ -159,7 +113,7 @@ function columnStyle(colCount: number) {
 
 // Filtered groups based on search
 const filteredGroups = computed(() => {
-  if (!isSearching.value) return groups.value
+  if (!isSearching.value) return groups.value.filter(shouldDisplayGroup)
   const q = searchQuery.value.trim().toLowerCase()
   return groups.value
     .map((g: GroupData) => ({
@@ -173,20 +127,32 @@ const filteredGroups = computed(() => {
     }))
     .filter((g: GroupData) => g.columns.length > 0)
 })
+const selectedTaskCount = computed(() => selectedTaskIds.value.size)
+const visibleSelectedTasks = computed(() => {
+  const selected = selectedTaskIds.value
+  return groups.value.flatMap((group) => group.columns.flatMap((column) => column.tasks)).filter((task) => selected.has(task.id))
+})
+const bulkMoveColumnOptions = computed(() =>
+  groups.value.flatMap((group) =>
+    group.columns.map((column) => ({
+      id: column.column.id,
+      label: `${displayGroupName(group.project)} / ${column.column.name}`,
+    })),
+  ),
+)
+function shouldDisplayGroup(group: GroupData) {
+  if (showCompletedPastDateGroups.value) return true
+  if (!isDateProject(group.project) || group.project >= todayKey()) return true
+  return taskCountByDone(group, false) > 0
+}
 
 // Should a group be expanded?
 function isGroupExpanded(project: string): boolean {
   if (isSearching.value) return true // expand all during search
+  if (collapsedGroups.value[project] === undefined && isDateProject(project)) {
+    return project === todayKey()
+  }
   return !collapsedGroups.value[project]
-}
-
-function mobileActiveColumn(group: GroupData) {
-  const activeId = activeMobileColumns.value[group.project]
-  return group.columns.find((column) => column.column.id === activeId) ?? group.columns[0] ?? null
-}
-
-function setMobileActiveColumn(project: string, columnId: string) {
-  activeMobileColumns.value = { ...activeMobileColumns.value, [project]: columnId }
 }
 
 function toggleGroup(project: string) {
@@ -213,6 +179,20 @@ function loadCollapsedState() {
       collapsedGroups.value = JSON.parse(saved)
       savedCollapsedGroups.value = { ...collapsedGroups.value }
     }
+    showFutureRecurring.value = localStorage.getItem('nalu-show-future-recurring-tasks') === 'true'
+    showCompletedPastDateGroups.value = localStorage.getItem('nalu-show-completed-past-date-groups') === 'true'
+  } catch {}
+}
+
+function saveFutureRecurringState() {
+  try {
+    localStorage.setItem('nalu-show-future-recurring-tasks', String(showFutureRecurring.value))
+  } catch {}
+}
+
+function saveCompletedPastDateGroupsState() {
+  try {
+    localStorage.setItem('nalu-show-completed-past-date-groups', String(showCompletedPastDateGroups.value))
   } catch {}
 }
 
@@ -220,17 +200,496 @@ function displayGroupName(project: string): string {
   return project === 'default' ? t('tasks.defaultGroup') : project
 }
 
+function incompleteTaskCount(group: GroupData): number {
+  return taskCountByDone(group, false)
+}
+
+function totalTaskCount(group: GroupData): number {
+  return group.columns.reduce((sum, column) => sum + column.tasks.length, 0)
+}
+
+function taskCountByDone(group: GroupData, done: boolean): number {
+  return group.columns.reduce((sum, column) => sum + column.tasks.filter((task) => task.done === done).length, 0)
+}
+
+function columnIncompleteTaskCount(column: ColumnWithTasks): number {
+  return column.tasks.filter((task) => !task.done).length
+}
+
+function appendTaskSection(lines: string[], group: GroupData, done: boolean) {
+  const sectionStart = lines.length
+  lines.push('', `## ${done ? t('tasks.completedTasks') : t('tasks.incompleteTasks')}`)
+
+  for (const column of group.columns) {
+    const tasks = column.tasks.filter((task) => task.done === done)
+    if (tasks.length === 0) continue
+    lines.push('', `[${column.column.name}]`)
+    for (const task of tasks) {
+      lines.push(`- ${task.title}`)
+    }
+  }
+
+  if (lines.length === sectionStart + 2) {
+    lines.splice(sectionStart)
+  }
+}
+
+function formatGroupTasksForClipboard(group: GroupData): string {
+  const lines = [displayGroupName(group.project)]
+  appendTaskSection(lines, group, false)
+  appendTaskSection(lines, group, true)
+  return lines.join('\n')
+}
+
+function padDatePart(value: number): string {
+  return String(value).padStart(2, '0')
+}
+
+function todayKey(): string {
+  const now = new Date()
+  return formatDateKey(now)
+}
+
+function formatDateKey(date: Date): string {
+  return `${date.getFullYear()}-${padDatePart(date.getMonth() + 1)}-${padDatePart(date.getDate())}`
+}
+
+function isDateProject(project: string): boolean {
+  return /^\d{4}-\d{2}-\d{2}$/.test(project)
+}
+
+function parseTaskDate(value: string) {
+  const [datePart, timePart = '00:00:00'] = value.split('T')
+  const [year, month, day] = datePart.split('-').map(Number)
+  const [hour = 0, minute = 0] = timePart.split(':').map(Number)
+  return new Date(year, month - 1, day, hour, minute)
+}
+
+function formatTaskScheduleTime(task: Task): string {
+  if (!task.scheduled_start_at) return ''
+  const start = parseTaskDate(task.scheduled_start_at)
+  const end = task.scheduled_end_at ? parseTaskDate(task.scheduled_end_at) : null
+  const startText = `${padDatePart(start.getHours())}:${padDatePart(start.getMinutes())}`
+  if (!end) return startText
+  return `${startText}-${padDatePart(end.getHours())}:${padDatePart(end.getMinutes())}`
+}
+
+function selectedCountLabel() {
+  return t('tasks.selectedCount').replace('{count}', String(selectedTaskCount.value))
+}
+
+function formatCurrentGroupDate(strategy: TaskGroupNamingStrategy): string {
+  const now = new Date()
+  const year = now.getFullYear()
+  const month = padDatePart(now.getMonth() + 1)
+  const day = padDatePart(now.getDate())
+  if (strategy === 'dateWeekday') {
+    const weekday = new Intl.DateTimeFormat(locale.value === 'zh' ? 'zh-CN' : 'en-US', { weekday: 'short' }).format(now)
+    return `${year}-${month}-${day} ${weekday}`
+  }
+  if (strategy === 'monthDay') {
+    return locale.value === 'zh' ? `${Number(month)}月${Number(day)}日` : `${month}/${day}`
+  }
+  if (strategy === 'defaultName') {
+    return settings.taskGroupNaming.fallbackName.trim() || t('tasks.groupNamingFallbackDefault')
+  }
+  return `${year}-${month}-${day}`
+}
+
+function nextAvailableGroupName(baseName: string, fallbackName = settings.taskGroupNaming.fallbackName): string {
+  const existing = new Set(groups.value.map((group) => group.project))
+  if (!existing.has(baseName)) return baseName
+
+  const fallback = fallbackName.trim() || t('tasks.groupNamingFallbackDefault')
+  if (!existing.has(fallback)) return fallback
+
+  let index = 2
+  let candidate = `${fallback} ${index}`
+  while (existing.has(candidate)) {
+    index += 1
+    candidate = `${fallback} ${index}`
+  }
+  return candidate
+}
+
+function nextDefaultGroupName(): string {
+  return nextAvailableGroupName(todayKey())
+}
+
+function toggleGroupSettings() {
+  groupSettingsOpen.value = !groupSettingsOpen.value
+}
+
+function setGroupNamingStrategy(strategy: TaskGroupNamingStrategy) {
+  settings.taskGroupNaming.strategy = strategy
+  settings.saveTaskGroupNaming()
+  if (addingGroup.value) {
+    newGroupName.value = nextDefaultGroupName()
+  }
+}
+
+function saveGroupNamingFallback() {
+  settings.saveTaskGroupNaming()
+  if (addingGroup.value) {
+    newGroupName.value = nextDefaultGroupName()
+  }
+}
+
 // Data loading
 async function loadBoard() {
   try {
-    groups.value = await invoke('get_board')
+    if (!isTauriRuntime()) {
+      syncLegacyBrowserTasks()
+    }
+    groups.value = isTauriRuntime()
+      ? await invoke('get_board', { includeFutureRecurring: showFutureRecurring.value })
+      : loadLocalBoard()
   } catch (error) {
     console.error('Failed to load board:', error)
   }
 }
 
+function isTauriRuntime() {
+  return typeof window !== 'undefined' && Boolean((window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__)
+}
+
+function loadAllLocalTasks(): Task[] {
+  try {
+    const raw = localStorage.getItem(LOCAL_CALENDAR_TASKS_KEY)
+    return raw ? JSON.parse(raw) : []
+  } catch {
+    return []
+  }
+}
+
+function saveAllLocalTasks(items: Task[]) {
+  localStorage.setItem(LOCAL_CALENDAR_TASKS_KEY, JSON.stringify(items))
+}
+
+function loadAllLocalColumns(): TaskColumn[] {
+  try {
+    const raw = localStorage.getItem(LOCAL_TASK_COLUMNS_KEY)
+    return raw ? JSON.parse(raw) : []
+  } catch {
+    return []
+  }
+}
+
+function saveAllLocalColumns(items: TaskColumn[]) {
+  localStorage.setItem(LOCAL_TASK_COLUMNS_KEY, JSON.stringify(items))
+}
+
+function makeLocalDefaultColumn(project: string): TaskColumn {
+  return {
+    id: `${project}__local_default_column`,
+    project,
+    name: '重要',
+    sort_order: 0,
+    created_at: '',
+    updated_at: '',
+  }
+}
+
+function ensureLocalDefaultColumn(project: string) {
+  const columns = loadAllLocalColumns()
+  const existing = columns.find((column) => column.project === project)
+  if (existing) return existing
+  const column = makeLocalDefaultColumn(project)
+  saveAllLocalColumns([...columns, column])
+  return column
+}
+
+function syncLegacyBrowserTasks() {
+  const existing = loadAllLocalTasks()
+  const byId = new Map(existing.map((task) => [task.id, task]))
+  const knownProjects = new Set(existing.map((task) => task.project || todayKey()))
+  const now = new Date().toISOString()
+  let changed = false
+
+  for (const row of legacyBrowserTasks) {
+    if (byId.has(row.id)) continue
+    const project = row.project || 'default'
+    byId.set(row.id, {
+      id: row.id,
+      project,
+      title: row.title,
+      done: Boolean(row.done),
+      progress: Number(row.progress || (row.done ? 100 : 0)),
+      column_id: `${project}__local_default_column`,
+      position: Number(row.position || Date.now()),
+      created_at: row.created_at || now,
+      updated_at: row.updated_at || row.created_at || now,
+      scheduled_start_at: null,
+      scheduled_end_at: null,
+      reminder_minutes: 0,
+      completed_at: row.done ? (row.updated_at || now) : null,
+      repeat_type: 'none',
+      recurrence_series_id: null,
+      recurrence_sequence: null,
+      recurrence_origin_at: null,
+      recurrence_detached: false,
+    })
+    knownProjects.add(project)
+    changed = true
+  }
+
+  for (const project of knownProjects) {
+    ensureLocalDefaultColumn(project)
+  }
+
+  if (!changed) return
+  saveAllLocalTasks(Array.from(byId.values()))
+  localStorage.removeItem('nalu-collapsed-groups')
+}
+
+function shouldShowLocalTask(task: Task) {
+  if (showFutureRecurring.value || task.done || !task.recurrence_series_id || !task.scheduled_start_at) return true
+  return formatDateKey(parseTaskDate(task.scheduled_start_at)) <= todayKey()
+}
+
+function localTaskProject(task: Task) {
+  if (task.scheduled_start_at) return formatDateKey(parseTaskDate(task.scheduled_start_at))
+  return task.project || todayKey()
+}
+
+function loadLocalBoard(): GroupData[] {
+  const tasks = loadAllLocalTasks().filter(shouldShowLocalTask)
+  const savedColumns = loadAllLocalColumns()
+  const projects = Array.from(new Set([...tasks.map(localTaskProject), ...savedColumns.map((column) => column.project), todayKey()])).sort()
+  const today = todayKey()
+  return projects.map((project, sortIndex) => {
+    const projectTasks = tasks.filter((task) => localTaskProject(task) === project)
+    const columns = savedColumns
+      .filter((column) => column.project === project)
+      .sort((a, b) => a.sort_order - b.sort_order)
+    if (columns.length === 0) columns.push(makeLocalDefaultColumn(project))
+    const knownColumnIds = new Set(columns.map((column) => column.id))
+    for (const task of projectTasks) {
+      if (!knownColumnIds.has(task.column_id)) {
+        columns.push({
+          id: task.column_id || `${project}__local_default_column`,
+          project,
+          name: columns.length === 0 ? '重要' : t('tasks.newColumn'),
+          sort_order: columns.length,
+          created_at: '',
+          updated_at: '',
+        })
+        knownColumnIds.add(task.column_id)
+      }
+    }
+    return {
+      project,
+      sort_order: sortIndex,
+      columns: columns.map((column) => ({
+          column,
+          tasks: projectTasks
+            .filter((task) => task.column_id === column.id || (!task.column_id && column.id === `${project}__local_default_column`))
+            .sort((a, b) => Number(a.done) - Number(b.done) || a.position - b.position),
+      })),
+    }
+  }).filter((group) => {
+    if (showFutureRecurring.value || !isDateProject(group.project) || group.project <= today) return true
+    return group.columns.some((column) => column.tasks.length > 0)
+  })
+}
+
+function localProjectFromColumn(columnId: string) {
+  const column = loadAllLocalColumns().find((item) => item.id === columnId)
+  if (column) return column.project
+  return columnId.replace(/__local_default_column$/, '')
+}
+
+function addLocalTaskToColumn(title: string, columnId: string) {
+  const now = new Date().toISOString()
+  const project = localProjectFromColumn(columnId)
+  const task: Task = {
+    id: crypto.randomUUID(),
+    project,
+    title,
+    done: false,
+    progress: 0,
+    column_id: columnId,
+    position: Date.now(),
+    created_at: now,
+    updated_at: now,
+    scheduled_start_at: null,
+    scheduled_end_at: null,
+    reminder_minutes: 0,
+    completed_at: null,
+    repeat_type: 'none',
+    recurrence_series_id: null,
+    recurrence_sequence: null,
+    recurrence_origin_at: null,
+    recurrence_detached: false,
+  }
+  saveAllLocalTasks([...loadAllLocalTasks(), task])
+}
+
+function normalizeLocalTaskPositions(tasks: Task[], columnId: string) {
+  const columnTasks = tasks
+    .filter((task) => task.column_id === columnId)
+    .sort((a, b) => a.position - b.position || a.created_at.localeCompare(b.created_at))
+  columnTasks.forEach((task, index) => {
+    task.position = index
+  })
+}
+
+function moveLocalTask(task: Task, columnId: string, position: number) {
+  const tasks = loadAllLocalTasks()
+  const columns = loadAllLocalColumns()
+  const targetColumn = columns.find((column) => column.id === columnId) ?? ensureLocalDefaultColumn(localProjectFromColumn(columnId))
+  const sourceColumnId = task.column_id
+  const movingTask = tasks.find((item) => item.id === task.id)
+  if (!movingTask) return
+
+  for (const item of tasks) {
+    if (item.column_id === columnId && item.id !== task.id && item.position >= position) {
+      item.position += 1
+    }
+  }
+  movingTask.project = targetColumn.project
+  movingTask.column_id = columnId
+  movingTask.position = position
+  movingTask.updated_at = new Date().toISOString()
+  normalizeLocalTaskPositions(tasks, sourceColumnId)
+  normalizeLocalTaskPositions(tasks, columnId)
+  saveAllLocalTasks(tasks)
+}
+
+function createLocalColumnByDrag(task: Task, project: string): [TaskColumn, Task] {
+  const now = new Date().toISOString()
+  const columns = loadAllLocalColumns()
+  if (!columns.some((column) => column.project === project)) columns.push(makeLocalDefaultColumn(project))
+  const sortOrder = Math.max(-1, ...columns.filter((column) => column.project === project).map((column) => column.sort_order)) + 1
+  const column: TaskColumn = {
+    id: crypto.randomUUID(),
+    project,
+    name: t('tasks.newColumn'),
+    sort_order: sortOrder,
+    created_at: now,
+    updated_at: now,
+  }
+  saveAllLocalColumns([...columns, column])
+  moveLocalTask(task, column.id, 0)
+  const movedTask = loadAllLocalTasks().find((item) => item.id === task.id) ?? task
+  return [column, movedTask]
+}
+
+function renameLocalColumn(id: string, name: string) {
+  saveAllLocalColumns(loadAllLocalColumns().map((column) => (column.id === id ? { ...column, name, updated_at: new Date().toISOString() } : column)))
+}
+
+function deleteLocalColumn(id: string): ColumnSnapshot {
+  const columns = loadAllLocalColumns()
+  const column = columns.find((item) => item.id === id)
+  if (!column) throw new Error('COLUMN_NOT_FOUND')
+  if (loadAllLocalTasks().some((task) => task.column_id === id)) throw new Error('NON_EMPTY')
+  if (columns.filter((item) => item.project === column.project).length <= 1) throw new Error('LAST_COLUMN')
+  saveAllLocalColumns(columns.filter((item) => item.id !== id))
+  return { column }
+}
+
+function restoreLocalColumn(snapshot: ColumnSnapshot) {
+  const columns = loadAllLocalColumns()
+  if (columns.some((column) => column.id === snapshot.column.id)) return
+  saveAllLocalColumns([...columns, snapshot.column].sort((a, b) => a.project.localeCompare(b.project) || a.sort_order - b.sort_order))
+}
+
+function reorderLocalColumns(columnIds: string[]) {
+  saveAllLocalColumns(
+    loadAllLocalColumns().map((column) => {
+      const sortOrder = columnIds.indexOf(column.id)
+      return sortOrder === -1 ? column : { ...column, sort_order: sortOrder, updated_at: new Date().toISOString() }
+    }),
+  )
+}
+
+function updateLocalTaskTitle(id: string, title: string) {
+  saveAllLocalTasks(loadAllLocalTasks().map((task) => (task.id === id ? { ...task, title, updated_at: new Date().toISOString() } : task)))
+}
+
+function toggleLocalTaskDone(id: string) {
+  saveAllLocalTasks(
+    loadAllLocalTasks().map((task) => {
+      if (task.id !== id) return task
+      const done = !task.done
+      return {
+        ...task,
+        done,
+        progress: done ? 100 : 0,
+        completed_at: done ? new Date().toISOString() : null,
+        updated_at: new Date().toISOString(),
+      }
+    }),
+  )
+}
+
+function deleteLocalTaskById(id: string): Task | null {
+  const tasks = loadAllLocalTasks()
+  const deleted = tasks.find((task) => task.id === id) ?? null
+  saveAllLocalTasks(tasks.filter((task) => task.id !== id))
+  return deleted
+}
+
+function restoreLocalTask(task: Task) {
+  saveAllLocalTasks([...loadAllLocalTasks(), task])
+}
+
+function bulkUpdateLocalTasksDone(ids: string[], done: boolean) {
+  const idSet = new Set(ids)
+  saveAllLocalTasks(
+    loadAllLocalTasks().map((task) =>
+      idSet.has(task.id)
+        ? {
+            ...task,
+            done,
+            progress: done ? 100 : 0,
+            completed_at: done ? task.completed_at || new Date().toISOString() : null,
+            updated_at: new Date().toISOString(),
+          }
+        : task,
+    ),
+  )
+}
+
+function bulkDeleteLocalTasks(ids: string[]): TaskSnapshot[] {
+  const idSet = new Set(ids)
+  const tasks = loadAllLocalTasks()
+  const snapshots = tasks.filter((task) => idSet.has(task.id)).map((task) => ({ task }))
+  saveAllLocalTasks(tasks.filter((task) => !idSet.has(task.id)))
+  return snapshots
+}
+
+function restoreLocalTasks(snapshots: TaskSnapshot[]) {
+  const existing = loadAllLocalTasks()
+  const existingIds = new Set(existing.map((task) => task.id))
+  saveAllLocalTasks([...existing, ...snapshots.map((snapshot) => snapshot.task).filter((task) => !existingIds.has(task.id))])
+}
+
+function bulkMoveLocalTasks(ids: string[], targetColumnId: string) {
+  ids.forEach((id, index) => {
+    const task = loadAllLocalTasks().find((item) => item.id === id)
+    if (task) moveLocalTask(task, targetColumnId, Date.now() + index)
+  })
+}
+
+async function toggleFutureRecurring() {
+  showFutureRecurring.value = !showFutureRecurring.value
+  clearTaskSelection()
+  saveFutureRecurringState()
+  await loadBoard()
+}
+
+async function toggleCompletedPastDateGroups() {
+  showCompletedPastDateGroups.value = !showCompletedPastDateGroups.value
+  clearTaskSelection()
+  saveCompletedPastDateGroupsState()
+  await loadBoard()
+}
+
 // Search watcher: save/restore collapse state
 watch(isSearching, (searching: boolean) => {
+  clearTaskSelection()
   if (searching) {
     savedCollapsedGroups.value = { ...collapsedGroups.value }
   } else {
@@ -238,15 +697,9 @@ watch(isSearching, (searching: boolean) => {
   }
 })
 
-watch(groups, (items) => {
-  const next = { ...activeMobileColumns.value }
-  for (const group of items) {
-    if (!next[group.project] || !group.columns.some((column) => column.column.id === next[group.project])) {
-      next[group.project] = group.columns[0]?.column.id ?? ''
-    }
-  }
-  activeMobileColumns.value = next
-})
+function onDocumentKeydown(e: KeyboardEvent) {
+  if (e.key === 'Escape') clearTaskSelection()
+}
 
 // Task operations
 async function addTaskToColumn(columnId: string) {
@@ -254,7 +707,11 @@ async function addTaskToColumn(columnId: string) {
   if (!title || savingNewTask.value) return
   savingNewTask.value = true
   try {
-    await invoke('add_task_to_column', { title, columnId })
+    if (isTauriRuntime()) {
+      await invoke('add_task_to_column', { title, columnId })
+    } else {
+      addLocalTaskToColumn(title, columnId)
+    }
     newTaskTitle.value = ''
     addingColumnId.value = null
     await loadBoard()
@@ -263,6 +720,114 @@ async function addTaskToColumn(columnId: string) {
   } finally {
     savingNewTask.value = false
   }
+}
+
+function toggleTaskSelection(id: string) {
+  const next = new Set(selectedTaskIds.value)
+  if (next.has(id)) next.delete(id)
+  else next.add(id)
+  selectedTaskIds.value = next
+}
+
+function clearTaskSelection() {
+  if (selectedTaskIds.value.size === 0) return
+  selectedTaskIds.value = new Set()
+  bulkMoveTargetColumnId.value = ''
+}
+
+function onTaskCardClick(event: MouseEvent) {
+  if (event.metaKey || event.ctrlKey) {
+    event.preventDefault()
+    return
+  }
+}
+
+function onTaskTitleClick(event: MouseEvent, task: Task) {
+  if (event.metaKey || event.ctrlKey) {
+    event.preventDefault()
+    return
+  }
+  startEditTask(task)
+}
+
+function selectedTaskIdsInDisplayOrder() {
+  const selected = selectedTaskIds.value
+  return groups.value.flatMap((group) => group.columns.flatMap((column) => column.tasks)).filter((task) => selected.has(task.id)).map((task) => task.id)
+}
+
+async function bulkSetTasksDone(done: boolean) {
+  const ids = selectedTaskIdsInDisplayOrder()
+  if (ids.length === 0) return
+  try {
+    if (isTauriRuntime()) {
+      await invoke('bulk_update_tasks_done', { ids, done })
+    } else {
+      bulkUpdateLocalTasksDone(ids, done)
+    }
+    showToast(done ? t('tasks.bulkCompleteSuccess') : t('tasks.bulkReopenSuccess'), null)
+    clearTaskSelection()
+    await loadBoard()
+  } catch (error) {
+    console.error('Failed to bulk update tasks:', error)
+  }
+}
+
+async function bulkDeleteSelectedTasks() {
+  const ids = selectedTaskIdsInDisplayOrder()
+  if (ids.length === 0) return
+  if (!window.confirm(t('tasks.bulkDeleteConfirm'))) return
+  try {
+    const snapshots: TaskSnapshot[] = isTauriRuntime()
+      ? await invoke('bulk_delete_tasks_with_snapshot', { ids })
+      : bulkDeleteLocalTasks(ids)
+    clearTaskSelection()
+    await loadBoard()
+    showToast(t('tasks.bulkDeleteSuccess'), async () => {
+      if (isTauriRuntime()) {
+        await invoke('restore_tasks', { snapshots })
+      } else {
+        restoreLocalTasks(snapshots)
+      }
+      await loadBoard()
+    })
+  } catch (error) {
+    console.error('Failed to bulk delete tasks:', error)
+  }
+}
+
+async function bulkMoveSelectedTasks() {
+  const ids = selectedTaskIdsInDisplayOrder()
+  if (ids.length === 0 || !bulkMoveTargetColumnId.value) return
+  try {
+    if (isTauriRuntime()) {
+      await invoke('bulk_move_tasks', { ids, targetColumnId: bulkMoveTargetColumnId.value })
+    } else {
+      bulkMoveLocalTasks(ids, bulkMoveTargetColumnId.value)
+    }
+    showToast(t('tasks.bulkMoveSuccess'), null)
+    clearTaskSelection()
+    await loadBoard()
+  } catch (error) {
+    console.error('Failed to bulk move tasks:', error)
+  }
+}
+
+async function scrollToTodayGroup() {
+  const project = todayKey()
+  collapsedGroups.value[project] = false
+  saveCollapsedState()
+  if (!groups.value.some((group) => group.project === project)) {
+    try {
+      if (isTauriRuntime()) {
+        await invoke('create_task_group', { project })
+      }
+      await loadBoard()
+    } catch (error) {
+      console.error('Failed to ensure today group:', error)
+    }
+  }
+  await nextTick()
+  document.querySelector<HTMLElement>(`[data-task-group-target="${project}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
 }
 
 function startAddTaskToColumn(columnId: string) {
@@ -291,10 +856,11 @@ function onAddTaskBlur(columnId: string) {
 function startAddGroup() {
   if (isSearching.value) return
   addingGroup.value = true
-  newGroupName.value = ''
+  newGroupName.value = nextDefaultGroupName()
   nextTick(() => {
     const input = document.querySelector('[data-group-add-input]') as HTMLInputElement
     input?.focus()
+    input?.select()
   })
 }
 
@@ -318,7 +884,11 @@ async function saveNewGroup() {
     cancelAddGroup()
     await loadBoard()
   } catch (error) {
-    console.error('Failed to create group:', error)
+    if (error === 'GROUP_EXISTS') {
+      showToast(t('tasks.groupAlreadyExists'), null)
+    } else {
+      console.error('Failed to create group:', error)
+    }
   } finally {
     savingNewGroup.value = false
   }
@@ -326,6 +896,7 @@ async function saveNewGroup() {
 
 async function copyGroup(project: string) {
   if (isSearching.value) return
+  groupMenuProject.value = null
   try {
     const copiedGroup: GroupData = await invoke('copy_task_group', { project })
     collapsedGroups.value[copiedGroup.project] = false
@@ -337,8 +908,38 @@ async function copyGroup(project: string) {
   }
 }
 
+async function copyGroupTasksToClipboard(group: GroupData) {
+  if (isSearching.value) return
+  groupMenuProject.value = null
+  const count = taskCountByDone(group, false) + taskCountByDone(group, true)
+  if (count === 0) {
+    showToast(t('tasks.noTasksToCopy'), null)
+    return
+  }
+
+  try {
+    await writeText(formatGroupTasksForClipboard(group))
+    showToast(t('tasks.copyTasksSuccess'), null)
+  } catch (error) {
+    console.error('Failed to copy group tasks:', error)
+  }
+}
+
+async function completeGroup(group: GroupData) {
+  if (isSearching.value || incompleteTaskCount(group) === 0) return
+  groupMenuProject.value = null
+  try {
+    await invoke('complete_task_group', { project: group.project })
+    await loadBoard()
+    showToast(t('tasks.completeGroupSuccess'), null)
+  } catch (error) {
+    console.error('Failed to complete group:', error)
+  }
+}
+
 async function deleteGroup(project: string) {
   if (isSearching.value || project === 'default') return
+  groupMenuProject.value = null
   try {
     await invoke('delete_task_group', { project })
     delete collapsedGroups.value[project]
@@ -361,7 +962,7 @@ function startEditGroup(project: string) {
   editingGroupProject.value = project
   editGroupName.value = project
   nextTick(() => {
-    const input = document.querySelector(`[data-group-edit-input="${project}"], [data-mobile-group-edit-input]`) as HTMLInputElement
+    const input = document.querySelector(`[data-group-edit-input="${project}"]`) as HTMLInputElement
     input?.focus()
     input?.select()
   })
@@ -402,59 +1003,10 @@ async function saveEditGroup() {
   }
 }
 
-function startAddColumn(project: string) {
-  if (isSearching.value) return
-  addingColumnProject.value = project
-  newColumnName.value = ''
-  vibrate(8)
-  nextTick(() => {
-    const input = document.querySelector('[data-column-add-input]') as HTMLInputElement
-    input?.focus()
-  })
-}
-
-function cancelAddColumn() {
-  addingColumnProject.value = null
-  newColumnName.value = ''
-}
-
-async function saveNewColumn() {
-  const project = addingColumnProject.value
-  if (!project || savingNewColumn.value) return
-  const name = newColumnName.value.trim() || t('tasks.newColumn')
-  savingNewColumn.value = true
-  try {
-    const column: TaskColumn = await invoke('create_column', { project, name })
-    setMobileActiveColumn(project, column.id)
-    cancelAddColumn()
-    await loadBoard()
-    vibrate(12)
-  } catch (error) {
-    console.error('Failed to create column:', error)
-  } finally {
-    savingNewColumn.value = false
-  }
-}
-
-function onAddColumnKeydown(e: KeyboardEvent) {
-  if (e.key === 'Enter') saveNewColumn()
-  else if (e.key === 'Escape') cancelAddColumn()
-}
-
 function startEditTask(task: Task) {
   if (Date.now() < suppressTaskClickUntil) return
   editingTaskId.value = task.id
   editTaskTitle.value = task.title
-  mobileEditColumnId.value = task.column_id
-  if (isMobilePlatform.value) {
-    vibrate(8)
-    nextTick(() => {
-      const input = document.querySelector('[data-mobile-task-edit-input]') as HTMLInputElement
-      input?.focus()
-      input?.select()
-    })
-    return
-  }
   nextTick(() => {
     const input = document.querySelector(`[data-edit-input="${task.id}"]`) as HTMLInputElement
     input?.focus()
@@ -463,8 +1015,6 @@ function startEditTask(task: Task) {
 
 async function saveEditTask() {
   if (!editingTaskId.value) return
-  const taskId = editingTaskId.value
-  const originalTask = findTaskById(taskId)
   const trimmed = editTaskTitle.value.trim()
   if (!trimmed) {
     // Restore old value
@@ -472,17 +1022,12 @@ async function saveEditTask() {
     return
   }
   try {
-    await invoke('update_task_content', { id: taskId, title: trimmed })
-    if (isMobilePlatform.value && originalTask && mobileEditColumnId.value && mobileEditColumnId.value !== originalTask.column_id) {
-      const targetColumn = findColumnById(mobileEditColumnId.value)
-      await invoke('move_task', {
-        id: taskId,
-        targetColumnId: mobileEditColumnId.value,
-        targetPosition: targetColumn?.tasks.length ?? 0,
-      })
+    if (isTauriRuntime()) {
+      await invoke('update_task_content', { id: editingTaskId.value, title: trimmed })
+    } else {
+      updateLocalTaskTitle(editingTaskId.value, trimmed)
     }
     editingTaskId.value = null
-    mobileEditColumnId.value = ''
     await loadBoard()
   } catch (error) {
     console.error('Failed to update task:', error)
@@ -491,12 +1036,15 @@ async function saveEditTask() {
 
 function cancelEditTask() {
   editingTaskId.value = null
-  mobileEditColumnId.value = ''
 }
 
 async function toggleTaskDone(task: Task) {
   try {
-    await invoke('toggle_task', { id: task.id })
+    if (isTauriRuntime()) {
+      await invoke('toggle_task', { id: task.id })
+    } else {
+      toggleLocalTaskDone(task.id)
+    }
     await loadBoard()
   } catch (error) {
     console.error('Failed to toggle task:', error)
@@ -505,10 +1053,16 @@ async function toggleTaskDone(task: Task) {
 
 async function deleteTask(task: Task) {
   try {
-    const snapshot: TaskSnapshot = await invoke('delete_task_with_snapshot', { id: task.id })
+    const snapshot: TaskSnapshot = isTauriRuntime()
+      ? await invoke('delete_task_with_snapshot', { id: task.id })
+      : { task: deleteLocalTaskById(task.id) ?? task }
     await loadBoard()
     showToast(t('tasks.deleteTaskUndo'), async () => {
-      await invoke('restore_task', { snapshot })
+      if (isTauriRuntime()) {
+        await invoke('restore_task', { snapshot })
+      } else {
+        restoreLocalTask(snapshot.task)
+      }
       await loadBoard()
     })
   } catch (error) {
@@ -521,11 +1075,9 @@ function startEditColumn(col: TaskColumn) {
   editingColumnId.value = col.id
   editColumnName.value = col.name
   columnMenuId.value = null
-  vibrate(8)
   nextTick(() => {
-    const input = document.querySelector(`[data-col-input="${col.id}"], [data-mobile-column-edit-input]`) as HTMLInputElement
+    const input = document.querySelector(`[data-col-input="${col.id}"]`) as HTMLInputElement
     input?.focus()
-    input?.select()
   })
 }
 
@@ -533,7 +1085,11 @@ async function saveEditColumn() {
   if (!editingColumnId.value) return
   const name = editColumnName.value.trim() || t('tasks.newColumn')
   try {
-    await invoke('rename_column', { id: editingColumnId.value, name })
+    if (isTauriRuntime()) {
+      await invoke('rename_column', { id: editingColumnId.value, name })
+    } else {
+      renameLocalColumn(editingColumnId.value, name)
+    }
     editingColumnId.value = null
     await loadBoard()
   } catch (error) {
@@ -543,45 +1099,32 @@ async function saveEditColumn() {
 
 function cancelEditColumn() {
   editingColumnId.value = null
-  editColumnName.value = ''
 }
 
 async function deleteColumn(col: TaskColumn) {
   columnMenuId.value = null
   try {
-    const snapshot: ColumnSnapshot = await invoke('delete_column', { id: col.id })
+    const snapshot: ColumnSnapshot = isTauriRuntime()
+      ? await invoke('delete_column', { id: col.id })
+      : deleteLocalColumn(col.id)
     await loadBoard()
     showToast(t('tasks.deleteColumnUndo'), async () => {
-      await invoke('restore_column', { snapshot })
+      if (isTauriRuntime()) {
+        await invoke('restore_column', { snapshot })
+      } else {
+        restoreLocalColumn(snapshot)
+      }
       await loadBoard()
     })
   } catch (error: any) {
-    if (error === 'NON_EMPTY') {
+    const code = error instanceof Error ? error.message : error
+    if (code === 'NON_EMPTY') {
       showToast(t('tasks.nonEmptyColumn'), null)
-    } else if (error === 'LAST_COLUMN') {
+    } else if (code === 'LAST_COLUMN') {
       showToast(t('tasks.lastColumn'), null)
     } else {
       console.error('Failed to delete column:', error)
     }
-  }
-}
-
-async function moveMobileColumn(group: GroupData, direction: -1 | 1) {
-  if (isSearching.value) return
-  const activeColumn = mobileActiveColumn(group)?.column
-  if (!activeColumn) return
-  const colIds = group.columns.map((c) => c.column.id)
-  const currentIndex = colIds.indexOf(activeColumn.id)
-  const nextIndex = currentIndex + direction
-  if (currentIndex === -1 || nextIndex < 0 || nextIndex >= colIds.length) return
-  const [moved] = colIds.splice(currentIndex, 1)
-  colIds.splice(nextIndex, 0, moved)
-  try {
-    await invoke('reorder_columns', { columnIds: colIds })
-    await loadBoard()
-    vibrate(12)
-  } catch (error) {
-    console.error('Reorder columns failed:', error)
   }
 }
 
@@ -645,11 +1188,6 @@ function findTaskLocation(taskId: string) {
   return null
 }
 
-function findTaskById(taskId: string) {
-  const location = findTaskLocation(taskId)
-  return location?.column.tasks.find((task) => task.id === taskId) ?? null
-}
-
 function clearTaskDropTarget() {
   dropTargetColumnId.value = null
   dropTargetPosition.value = -1
@@ -662,13 +1200,20 @@ function clearTextSelection() {
 }
 
 function moveTask(task: Task, columnId: string, position: number) {
+  if (!isTauriRuntime()) {
+    moveLocalTask(task, columnId, position)
+    return loadBoard()
+  }
   return invoke('move_task', { id: task.id, targetColumnId: columnId, targetPosition: position })
     .then(() => loadBoard())
     .catch((err: unknown) => console.error('Move failed:', err))
 }
 
 function createColumnByDrag(task: Task, project: string) {
-  return invoke<[TaskColumn, Task]>('create_column_by_drag', { taskId: task.id, project })
+  const action = isTauriRuntime()
+    ? invoke<[TaskColumn, Task]>('create_column_by_drag', { taskId: task.id, project })
+    : Promise.resolve(createLocalColumnByDrag(task, project))
+  return action
     .then((result) => {
       return loadBoard().then(() => {
         // Auto-enter edit mode for the new column
@@ -681,7 +1226,7 @@ function createColumnByDrag(task: Task, project: string) {
         })
       })
     })
-    .catch((err: any) => console.error('Create column by drag failed:', err))
+    .catch((err: unknown) => console.error('Create column by drag failed:', err))
 }
 
 function setTaskDropTargetFromPoint(x: number, y: number) {
@@ -751,39 +1296,35 @@ function setTaskDropTargetFromPoint(x: number, y: number) {
 }
 
 function stopPointerTaskDrag() {
-  const drag = pointerTaskDrag.value
   window.removeEventListener('pointermove', onTaskPointerMove)
   window.removeEventListener('pointerup', onTaskPointerUp)
   window.removeEventListener('pointercancel', onTaskPointerCancel)
-  try { drag?.element.releasePointerCapture(drag.pointerId) } catch {}
   document.body.style.userSelect = ''
-  document.body.style.touchAction = ''
   clearTextSelection()
   pointerTaskDrag.value = null
-  stopDragPreview()
 }
 
 function onTaskPointerDown(e: PointerEvent, task: Task) {
   if (isSearching.value || e.button !== 0 || editingTaskId.value === task.id) return
+  if (e.metaKey || e.ctrlKey) {
+    e.preventDefault()
+    e.stopPropagation()
+    toggleTaskSelection(task.id)
+    return
+  }
   const target = e.target as HTMLElement
   if (target.closest('button, input, textarea, select')) return
 
   document.body.style.userSelect = 'none'
-  document.body.style.touchAction = 'none'
   clearTextSelection()
-  const element = e.currentTarget as HTMLElement
-  const rect = element.getBoundingClientRect()
-  try { element.setPointerCapture(e.pointerId) } catch {}
   pointerTaskDrag.value = {
     task,
     pointerId: e.pointerId,
-    element,
-    width: rect.width,
     startX: e.clientX,
     startY: e.clientY,
     active: false,
   }
-  window.addEventListener('pointermove', onTaskPointerMove, nonPassivePointerOptions)
+  window.addEventListener('pointermove', onTaskPointerMove)
   window.addEventListener('pointerup', onTaskPointerUp)
   window.addEventListener('pointercancel', onTaskPointerCancel)
 }
@@ -794,18 +1335,15 @@ function onTaskPointerMove(e: PointerEvent) {
 
   const distance = Math.hypot(e.clientX - drag.startX, e.clientY - drag.startY)
   if (!drag.active) {
-    if (distance < (isMobilePlatform.value ? 12 : 6)) return
+    if (distance < 6) return
     drag.active = true
     draggedTask.value = drag.task
     draggedColumn.value = null
     columnMenuId.value = null
-    startDragPreview('task', drag.task.title, e, drag.width)
-    vibrate(12)
   }
 
   e.preventDefault()
   clearTextSelection()
-  moveDragPreview(e)
   setTaskDropTargetFromPoint(e.clientX, e.clientY)
 }
 
@@ -820,7 +1358,7 @@ function onTaskPointerUp(e: PointerEvent) {
   const targetPosition = dropTargetPosition.value
 
   if (wasActive) {
-    suppressTaskClickUntil = Date.now() + 350
+    suppressTaskClickUntil = Date.now() + 250
     e.preventDefault()
   }
 
@@ -828,7 +1366,6 @@ function onTaskPointerUp(e: PointerEvent) {
   onTaskDragEnd()
 
   if (!wasActive) return
-  if (targetProject || (targetColumnId && targetPosition >= 0)) vibrate(18)
   if (targetProject) {
     createColumnByDrag(task, targetProject)
   } else if (targetColumnId && targetPosition >= 0) {
@@ -894,18 +1431,14 @@ function clearGroupDropTarget() {
 }
 
 function stopPointerGroupDrag() {
-  const drag = pointerGroupDrag.value
   window.removeEventListener('pointermove', onGroupPointerMove)
   window.removeEventListener('pointerup', onGroupPointerUp)
   window.removeEventListener('pointercancel', onGroupPointerCancel)
-  try { drag?.element.releasePointerCapture(drag.pointerId) } catch {}
   document.body.style.userSelect = ''
-  document.body.style.touchAction = ''
   clearTextSelection()
   pointerGroupDrag.value = null
   draggedGroupProject.value = null
   clearGroupDropTarget()
-  stopDragPreview()
 }
 
 function setGroupDropTargetFromPoint(x: number, y: number) {
@@ -924,21 +1457,15 @@ function onGroupPointerDown(e: PointerEvent, project: string) {
   if (target.closest('button, input, textarea, select')) return
 
   document.body.style.userSelect = 'none'
-  document.body.style.touchAction = 'none'
   clearTextSelection()
-  const element = e.currentTarget as HTMLElement
-  const rect = element.getBoundingClientRect()
-  try { element.setPointerCapture(e.pointerId) } catch {}
   pointerGroupDrag.value = {
     project,
     pointerId: e.pointerId,
-    element,
-    width: rect.width,
     startX: e.clientX,
     startY: e.clientY,
     active: false,
   }
-  window.addEventListener('pointermove', onGroupPointerMove, nonPassivePointerOptions)
+  window.addEventListener('pointermove', onGroupPointerMove)
   window.addEventListener('pointerup', onGroupPointerUp)
   window.addEventListener('pointercancel', onGroupPointerCancel)
 }
@@ -955,13 +1482,10 @@ function onGroupPointerMove(e: PointerEvent) {
     draggedTask.value = null
     draggedColumn.value = null
     columnMenuId.value = null
-    startDragPreview('group', displayGroupName(drag.project), e, drag.width, t('tasks.project'))
-    vibrate(12)
   }
 
   e.preventDefault()
   clearTextSelection()
-  moveDragPreview(e)
   setGroupDropTargetFromPoint(e.clientX, e.clientY)
 }
 
@@ -980,7 +1504,6 @@ async function onGroupPointerUp(e: PointerEvent) {
 
   stopPointerGroupDrag()
   if (!wasActive || !targetProject || draggedProject === targetProject) return
-  vibrate(18)
 
   const projects = groups.value.map((group) => group.project)
   const dragIdx = projects.indexOf(draggedProject)
@@ -1008,18 +1531,14 @@ function clearColumnReorderDropTarget() {
 }
 
 function stopPointerColumnDrag() {
-  const drag = pointerColumnDrag.value
   window.removeEventListener('pointermove', onColumnPointerMove)
   window.removeEventListener('pointerup', onColumnPointerUp)
   window.removeEventListener('pointercancel', onColumnPointerCancel)
-  try { drag?.element.releasePointerCapture(drag.pointerId) } catch {}
   document.body.style.userSelect = ''
-  document.body.style.touchAction = ''
   clearTextSelection()
   pointerColumnDrag.value = null
   draggedColumn.value = null
   clearColumnReorderDropTarget()
-  stopDragPreview()
 }
 
 function setColumnReorderDropTargetFromPoint(x: number, y: number) {
@@ -1042,21 +1561,15 @@ function onColumnPointerDown(e: PointerEvent, col: TaskColumn) {
   if (target.closest('button, input, textarea, select')) return
 
   document.body.style.userSelect = 'none'
-  document.body.style.touchAction = 'none'
   clearTextSelection()
-  const element = e.currentTarget as HTMLElement
-  const rect = element.getBoundingClientRect()
-  try { element.setPointerCapture(e.pointerId) } catch {}
   pointerColumnDrag.value = {
     column: col,
     pointerId: e.pointerId,
-    element,
-    width: rect.width,
     startX: e.clientX,
     startY: e.clientY,
     active: false,
   }
-  window.addEventListener('pointermove', onColumnPointerMove, nonPassivePointerOptions)
+  window.addEventListener('pointermove', onColumnPointerMove)
   window.addEventListener('pointerup', onColumnPointerUp)
   window.addEventListener('pointercancel', onColumnPointerCancel)
 }
@@ -1072,13 +1585,10 @@ function onColumnPointerMove(e: PointerEvent) {
     draggedColumn.value = drag.column
     draggedTask.value = null
     columnMenuId.value = null
-    startDragPreview('column', drag.column.name, e, drag.width, displayGroupName(drag.column.project))
-    vibrate(12)
   }
 
   e.preventDefault()
   clearTextSelection()
-  moveDragPreview(e)
   setColumnReorderDropTargetFromPoint(e.clientX, e.clientY)
 }
 
@@ -1093,7 +1603,6 @@ async function onColumnPointerUp(e: PointerEvent) {
   if (wasActive) e.preventDefault()
   stopPointerColumnDrag()
   if (!wasActive || !targetColumnId || dragged.id === targetColumnId) return
-  vibrate(18)
 
   const group = groups.value.find((g) => g.project === dragged.project)
   if (!group) return
@@ -1107,7 +1616,11 @@ async function onColumnPointerUp(e: PointerEvent) {
   colIds.splice(dropIdx, 0, dragged.id)
 
   try {
-    await invoke('reorder_columns', { columnIds: colIds })
+    if (isTauriRuntime()) {
+      await invoke('reorder_columns', { columnIds: colIds })
+    } else {
+      reorderLocalColumns(colIds)
+    }
     await loadBoard()
   } catch (error) {
     console.error('Reorder columns failed:', error)
@@ -1125,6 +1638,10 @@ function toggleColumnMenu(colId: string) {
 
 function closeColumnMenu() {
   columnMenuId.value = null
+}
+
+function toggleGroupMenu(project: string) {
+  groupMenuProject.value = groupMenuProject.value === project ? null : project
 }
 
 // Keyboard handlers
@@ -1153,24 +1670,32 @@ function onEditColumnKeydown(e: KeyboardEvent) {
   else if (e.key === 'Escape') cancelEditColumn()
 }
 
-// Click outside handler for column menu
+// Click outside handler for floating menus
 function onClickOutside(e: MouseEvent) {
+  const target = e.target as HTMLElement
   if (columnMenuId.value) {
-    const target = e.target as HTMLElement
     if (!target.closest('[data-col-menu]')) {
       closeColumnMenu()
     }
   }
+  if (groupSettingsOpen.value && !target.closest('[data-group-settings]')) {
+    groupSettingsOpen.value = false
+  }
+  if (groupMenuProject.value && !target.closest('[data-group-menu]')) {
+    groupMenuProject.value = null
+  }
 }
 
 onMounted(() => {
-  loadBoard()
   loadCollapsedState()
+  loadBoard()
   document.addEventListener('click', onClickOutside)
+  document.addEventListener('keydown', onDocumentKeydown)
 })
 
 onUnmounted(() => {
   document.removeEventListener('click', onClickOutside)
+  document.removeEventListener('keydown', onDocumentKeydown)
   stopPointerTaskDrag()
   stopPointerGroupDrag()
   stopPointerColumnDrag()
@@ -1187,6 +1712,67 @@ useAiRefresh(loadBoard)
     <div :class="isCompactWidth ? 'px-3 pt-3 pb-2' : 'px-6 pt-6 pb-3'">
       <div class="mb-4 flex flex-wrap items-center gap-3">
         <h1 class="text-2xl font-bold mr-auto">{{ t('tasks.title') }}</h1>
+        <div class="relative" data-group-settings>
+          <button
+            class="inline-flex items-center justify-center h-8 w-8 rounded-md border transition-colors hover:bg-secondary"
+            :title="t('tasks.groupNamingSettings')"
+            @click.stop="toggleGroupSettings"
+          >
+            <Settings2 class="w-4 h-4" />
+          </button>
+          <div
+            v-if="groupSettingsOpen"
+            class="absolute right-0 top-10 z-20 w-80 rounded-lg border bg-popover p-3 shadow-lg"
+            @click.stop
+          >
+            <div class="mb-3">
+              <h2 class="text-sm font-semibold">{{ t('tasks.groupNamingSettings') }}</h2>
+              <p class="mt-1 text-xs text-muted-foreground">{{ t('tasks.groupNamingDesc') }}</p>
+            </div>
+            <div class="mb-3 space-y-2 border-b pb-3">
+              <button
+                class="flex h-9 w-full items-center justify-between rounded-md border px-3 text-left text-xs transition-colors hover:bg-secondary"
+                :class="showFutureRecurring ? 'border-primary bg-primary/10 text-primary' : ''"
+                type="button"
+                @click="toggleFutureRecurring"
+              >
+                <span>{{ t('tasks.showFutureRecurring') }}</span>
+                <span class="h-2 w-2 rounded-full" :class="showFutureRecurring ? 'bg-primary' : 'bg-muted-foreground/40'"></span>
+              </button>
+              <button
+                class="flex h-9 w-full items-center justify-between rounded-md border px-3 text-left text-xs transition-colors hover:bg-secondary"
+                :class="showCompletedPastDateGroups ? 'border-primary bg-primary/10 text-primary' : ''"
+                type="button"
+                @click="toggleCompletedPastDateGroups"
+              >
+                <span>{{ t('tasks.showCompletedPastGroups') }}</span>
+                <span class="h-2 w-2 rounded-full" :class="showCompletedPastDateGroups ? 'bg-primary' : 'bg-muted-foreground/40'"></span>
+              </button>
+            </div>
+            <div class="grid grid-cols-2 gap-2">
+              <button
+                v-for="option in groupNamingOptions"
+                :key="option.id"
+                class="h-9 rounded-md border px-3 text-left text-xs transition-colors"
+                :class="settings.taskGroupNaming.strategy === option.id ? 'border-primary bg-primary/10 text-primary' : 'hover:bg-secondary'"
+                @click="setGroupNamingStrategy(option.id)"
+              >
+                {{ t(option.label) }}
+              </button>
+            </div>
+            <label class="mt-3 block text-xs font-medium text-muted-foreground" for="task-group-fallback-name">
+              {{ t('tasks.groupNamingFallback') }}
+            </label>
+            <Input
+              id="task-group-fallback-name"
+              v-model="settings.taskGroupNaming.fallbackName"
+              class="mt-1 h-8"
+              :placeholder="t('tasks.groupNamingFallbackDefault')"
+              @blur="saveGroupNamingFallback"
+              @keydown.enter.prevent="saveGroupNamingFallback"
+            />
+          </div>
+        </div>
         <div v-if="addingGroup" class="flex items-center gap-2">
           <Input
             v-model="newGroupName"
@@ -1223,204 +1809,15 @@ useAiRefresh(loadBoard)
     </div>
 
     <!-- Board -->
-    <div class="flex-1 overflow-y-auto pb-6" :class="isCompactWidth ? 'px-3' : 'px-6'">
+    <div class="flex-1 overflow-y-auto px-6 pb-6" @click="clearTaskSelection">
       <!-- No results -->
       <div v-if="isSearching && filteredGroups.length === 0" class="text-center py-12 text-muted-foreground text-sm">
         {{ t('tasks.searchNoResults') }}
       </div>
 
-      <!-- Phone layout: groups stay vertical, columns become status filters. -->
-      <template v-if="isPhoneTaskLayout">
-      <div
-          v-for="group in (isSearching ? filteredGroups : groups)"
-          :key="group.project"
-          class="mb-5 rounded-2xl border bg-card/60 p-3 transition-colors"
-          :class="dropTargetTaskGroupProject === group.project ? 'ring-2 ring-primary/30' : ''"
-          :data-task-group-target="group.project"
-        >
-        <div
-          class="flex w-full items-center gap-2 py-1.5"
-          :data-task-group="group.project"
-          @pointerdown="onGroupPointerDown($event, group.project)"
-        >
-          <button class="mobile-icon-button h-9 w-9 border-0 bg-transparent" @click="onGroupHeaderClick(group.project)">
-            <ChevronDown v-if="isGroupExpanded(group.project)" class="w-4 h-4 text-muted-foreground transition-transform" />
-            <ChevronRight v-else class="w-4 h-4 text-muted-foreground transition-transform" />
-          </button>
-          <button class="min-w-0 flex-1 truncate py-2 text-left text-sm font-semibold" @click="onGroupHeaderClick(group.project)">
-            {{ displayGroupName(group.project) }}
-          </button>
-          <span class="text-xs text-muted-foreground">{{ group.columns.reduce((sum, c) => sum + c.tasks.length, 0) }}</span>
-          <button
-            v-if="!isSearching"
-            class="mobile-icon-button h-9 w-9"
-            :title="t('tasks.addColumn')"
-            @pointerdown.stop
-            @click.stop="startAddColumn(group.project)"
-          >
-            <Plus class="h-4 w-4" />
-          </button>
-          <button
-            v-if="group.project !== 'default' && !isSearching"
-            class="mobile-icon-button h-9 w-9"
-            :title="t('tasks.renameGroup')"
-            @pointerdown.stop
-            @click.stop="startEditGroup(group.project)"
-          >
-            <Pencil class="h-4 w-4" />
-          </button>
-          <button
-            v-if="!isSearching"
-            class="mobile-icon-button h-9 w-9"
-            :title="t('tasks.copyGroup')"
-            @pointerdown.stop
-            @click.stop="copyGroup(group.project)"
-          >
-            <Copy class="h-4 w-4" />
-          </button>
-          <button
-            v-if="group.project !== 'default' && !isSearching"
-            class="mobile-icon-button h-9 w-9 text-muted-foreground hover:text-red-400"
-            :title="t('tasks.deleteGroup')"
-            @pointerdown.stop
-            @click.stop="deleteGroup(group.project)"
-          >
-            <Trash2 class="h-4 w-4" />
-          </button>
-        </div>
-
-        <template v-if="isGroupExpanded(group.project)">
-          <div class="mt-3 grid grid-cols-2 gap-2">
-            <button
-              v-for="cwt in group.columns"
-              :key="cwt.column.id"
-              class="flex min-w-0 items-center justify-between gap-2 rounded-xl border px-3 py-2 text-left text-sm transition-colors"
-              :class="mobileActiveColumn(group)?.column.id === cwt.column.id ? 'border-primary bg-accent text-accent-foreground' : 'bg-background text-muted-foreground'"
-              @click="setMobileActiveColumn(group.project, cwt.column.id)"
-            >
-              <span class="truncate font-medium">{{ cwt.column.name }}</span>
-              <span class="shrink-0 text-xs tabular-nums">{{ cwt.tasks.length }}</span>
-            </button>
-          </div>
-
-          <div
-            v-if="mobileActiveColumn(group)"
-            class="mt-3 space-y-2"
-            :data-column-task-list="mobileActiveColumn(group)?.column.id"
-          >
-            <div
-              class="flex items-center gap-2 rounded-xl border bg-background/80 px-3 py-2"
-              :data-task-column="mobileActiveColumn(group)?.column.id"
-            >
-              <div class="min-w-0 flex-1">
-                <div class="truncate text-sm font-medium">{{ mobileActiveColumn(group)?.column.name }}</div>
-                <div class="text-xs text-muted-foreground">{{ t('tasks.column') }}</div>
-              </div>
-              <button
-                class="mobile-icon-button h-9 w-9"
-                :disabled="group.columns.findIndex((c) => c.column.id === mobileActiveColumn(group)?.column.id) === 0"
-                :title="t('tasks.moveColumnLeft')"
-                @pointerdown.stop
-                @click.stop="moveMobileColumn(group, -1)"
-              >
-                <ArrowLeft class="h-4 w-4" />
-              </button>
-              <button
-                class="mobile-icon-button h-9 w-9"
-                :disabled="group.columns.findIndex((c) => c.column.id === mobileActiveColumn(group)?.column.id) === group.columns.length - 1"
-                :title="t('tasks.moveColumnRight')"
-                @pointerdown.stop
-                @click.stop="moveMobileColumn(group, 1)"
-              >
-                <ArrowRight class="h-4 w-4" />
-              </button>
-              <button
-                class="mobile-icon-button h-9 w-9"
-                :title="t('tasks.renameColumn')"
-                @pointerdown.stop
-                @click.stop="startEditColumn(mobileActiveColumn(group)!.column)"
-              >
-                <Pencil class="h-4 w-4" />
-              </button>
-              <button
-                class="mobile-icon-button h-9 w-9 text-muted-foreground hover:text-red-400"
-                :title="t('tasks.deleteColumn')"
-                @pointerdown.stop
-                @click.stop="deleteColumn(mobileActiveColumn(group)!.column)"
-              >
-                <Trash2 class="h-4 w-4" />
-              </button>
-            </div>
-            <template v-for="(task, idx) in mobileActiveColumn(group)?.tasks ?? []" :key="task.id">
-              <div
-                v-if="dropTargetColumnId === mobileActiveColumn(group)?.column.id && dropTargetPosition === idx && draggedTask && draggedTask.id !== task.id"
-                class="h-1 rounded-full bg-primary"
-              />
-              <div
-                class="relative min-h-[60px] touch-none select-none rounded-xl border bg-background p-3 pr-20 transition-all duration-150 active:border-primary/45 active:bg-accent/20"
-                :class="draggedTask?.id === task.id ? 'opacity-40' : ''"
-                :data-task-card="task.id"
-                @pointerdown="onTaskPointerDown($event, task)"
-                @click="startEditTask(task)"
-              >
-                <div class="flex items-start gap-2.5">
-                  <GripHorizontal class="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground/50" />
-                  <p class="min-w-0 flex-1 text-sm leading-5" :class="{ 'line-through text-muted-foreground': task.done }">{{ task.title }}</p>
-                </div>
-                <button
-                  class="absolute right-11 top-3 rounded p-1"
-                  :class="{ 'text-primary': task.done }"
-                  :title="task.done ? t('tasks.reopenTask') : t('tasks.completeTask')"
-                  @pointerdown.stop
-                  @click.stop="toggleTaskDone(task)"
-                >
-                  <CheckCircle2 v-if="task.done" class="w-4 h-4" />
-                  <Circle v-else class="w-4 h-4" />
-                </button>
-                <button
-                  class="absolute right-3 top-3 rounded p-1 text-muted-foreground hover:text-red-400"
-                  @pointerdown.stop
-                  @click.stop="deleteTask(task)"
-                >
-                  <Trash2 class="w-4 h-4" />
-                </button>
-              </div>
-            </template>
-            <div
-              v-if="dropTargetColumnId === mobileActiveColumn(group)?.column.id && dropTargetPosition === (mobileActiveColumn(group)?.tasks.length ?? 0) && draggedTask"
-              class="h-1 rounded-full bg-primary"
-            />
-            <div v-if="draggedTask" class="h-5" :data-column-drop-tail="mobileActiveColumn(group)?.column.id" />
-            <div class="border-t pt-2">
-              <template v-if="addingColumnId === mobileActiveColumn(group)?.column.id">
-                <input
-                  v-model="newTaskTitle"
-                  :data-col-add-input="mobileActiveColumn(group)?.column.id"
-                  class="w-full rounded-xl border bg-background px-3 py-3 text-sm outline-none focus:border-primary"
-                  :placeholder="t('tasks.placeholder')"
-                  :disabled="savingNewTask"
-                  @keydown="onAddTaskKeydown($event, mobileActiveColumn(group)!.column.id)"
-                  @blur="onAddTaskBlur(mobileActiveColumn(group)!.column.id)"
-                />
-              </template>
-              <button
-                v-else-if="!isSearching && mobileActiveColumn(group)"
-                class="flex w-full items-center gap-1.5 rounded-xl px-3 py-3 text-sm text-muted-foreground transition-colors hover:bg-secondary/50"
-                @click="startAddTaskToColumn(mobileActiveColumn(group)!.column.id)"
-              >
-                <Plus class="w-4 h-4" />
-                <span>{{ t('tasks.addTask') }}</span>
-              </button>
-            </div>
-          </div>
-        </template>
-        </div>
-      </template>
-
       <!-- Groups -->
-      <template v-else>
       <div
-        v-for="group in (isSearching ? filteredGroups : groups)"
+        v-for="group in filteredGroups"
         :key="group.project"
         class="mb-6"
         :data-task-group-target="group.project"
@@ -1428,7 +1825,7 @@ useAiRefresh(loadBoard)
       >
         <!-- Group header -->
         <div
-          class="flex items-center gap-2 py-2 cursor-pointer select-none group touch-none"
+          class="flex items-center gap-2 py-2 cursor-pointer select-none group"
           :data-task-group="group.project"
           :data-task-group-target="group.project"
           :class="{
@@ -1457,32 +1854,63 @@ useAiRefresh(loadBoard)
             @dblclick.stop="startEditGroup(group.project)"
           >{{ displayGroupName(group.project) }}</span>
           <span class="text-xs text-muted-foreground">
-            ({{ group.columns.reduce((sum, c) => sum + c.tasks.length, 0) }})
+            ({{ incompleteTaskCount(group) }}/{{ totalTaskCount(group) }})
           </span>
-          <div class="ml-auto flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+          <div
+            class="relative ml-auto flex items-center gap-1 transition-opacity"
+            :class="groupMenuProject === group.project ? 'pointer-events-auto opacity-100' : 'pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100'"
+            data-group-menu
+          >
             <button
               class="p-1 rounded transition-colors hover:bg-secondary"
-              :title="t('tasks.copyGroup')"
-              @click.stop="copyGroup(group.project)"
+              :title="t('tasks.groupActions')"
+              @click.stop="toggleGroupMenu(group.project)"
             >
-              <Copy class="w-3.5 h-3.5 text-muted-foreground" />
+              <MoreHorizontal class="w-3.5 h-3.5 text-muted-foreground" />
             </button>
-            <button
-              v-if="group.project !== 'default'"
-              class="p-1 rounded transition-colors hover:bg-secondary hover:text-red-400"
-              :title="t('tasks.deleteGroup')"
-              @click.stop="deleteGroup(group.project)"
+            <div
+              v-if="groupMenuProject === group.project"
+              class="absolute right-0 top-full z-30 mt-1 min-w-[180px] overflow-hidden rounded-lg border bg-card shadow-lg"
             >
-              <Trash2 class="w-3.5 h-3.5" />
-            </button>
+              <button
+                class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
+                :disabled="incompleteTaskCount(group) === 0"
+                @click.stop="completeGroup(group)"
+              >
+                <CheckCircle2 class="w-3.5 h-3.5" />
+                {{ t('tasks.completeGroup') }}
+              </button>
+              <button
+                class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
+                :disabled="taskCountByDone(group, false) + taskCountByDone(group, true) === 0"
+                @click.stop="copyGroupTasksToClipboard(group)"
+              >
+                <Copy class="w-3.5 h-3.5" />
+                {{ t('tasks.copyTasks') }}
+              </button>
+              <button
+                class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition-colors hover:bg-accent"
+                @click.stop="copyGroup(group.project)"
+              >
+                <Copy class="w-3.5 h-3.5" />
+                {{ t('tasks.copyGroup') }}
+              </button>
+              <button
+                v-if="group.project !== 'default'"
+                class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-red-400 transition-colors hover:bg-accent"
+                @click.stop="deleteGroup(group.project)"
+              >
+                <Trash2 class="w-3.5 h-3.5" />
+                {{ t('tasks.deleteGroup') }}
+              </button>
+            </div>
           </div>
         </div>
 
         <!-- Columns (kanban) -->
         <div
           v-if="isGroupExpanded(group.project)"
-          class="relative flex gap-3 overflow-x-auto pb-3"
-          :class="isCompactWidth ? 'snap-x snap-mandatory scroll-px-3' : ''"
+          class="relative flex gap-4 overflow-x-auto pb-2"
         >
           <div
             v-for="cwt in group.columns"
@@ -1490,18 +1918,14 @@ useAiRefresh(loadBoard)
             :data-task-column="cwt.column.id"
             class="flex-shrink-0 bg-card border rounded-lg flex flex-col min-h-[300px] max-h-[calc(100vh-280px)] transition-colors"
             :style="columnStyle(group.columns.length)"
-            :class="[
-              isCompactWidth ? 'snap-start rounded-xl' : '',
-              {
-                'opacity-50': (draggedTask && draggedTask.column_id === cwt.column.id) || draggedColumn?.id === cwt.column.id,
-                'ring-2 ring-primary/30': (dropTargetColumnId === cwt.column.id && draggedTask) || dropTargetColumnReorderId === cwt.column.id,
-              },
-            ]"
+            :class="{
+              'opacity-50': (draggedTask && draggedTask.column_id === cwt.column.id) || draggedColumn?.id === cwt.column.id,
+              'ring-2 ring-primary/30': (dropTargetColumnId === cwt.column.id && draggedTask) || dropTargetColumnReorderId === cwt.column.id,
+            }"
           >
             <!-- Column header -->
             <div
-              class="flex items-center gap-2 border-b cursor-grab active:cursor-grabbing select-none touch-none"
-              :class="isCompactWidth ? 'px-4 py-3' : 'px-3 py-2'"
+              class="flex items-center gap-2 px-3 py-2 border-b"
               :data-column-header="cwt.column.id"
               @pointerdown="onColumnPointerDown($event, cwt.column)"
             >
@@ -1524,7 +1948,7 @@ useAiRefresh(loadBoard)
                   @dblclick="startEditColumn(cwt.column)"
                 >{{ cwt.column.name }}</span>
               </template>
-              <span class="text-xs text-muted-foreground flex-shrink-0">{{ cwt.tasks.length }}</span>
+              <span class="text-xs text-muted-foreground flex-shrink-0">{{ columnIncompleteTaskCount(cwt) }}</span>
               <div class="relative flex-shrink-0" data-col-menu>
                 <button
                   class="p-1 rounded transition-colors hover:bg-secondary"
@@ -1550,8 +1974,7 @@ useAiRefresh(loadBoard)
 
             <!-- Task list -->
             <div
-              class="flex-1 overflow-y-auto min-h-[40px]"
-              :class="isCompactWidth ? 'space-y-3 p-3' : 'space-y-2 p-2'"
+              class="flex-1 overflow-y-auto p-2 space-y-2 min-h-[40px]"
               :data-column-task-list="cwt.column.id"
               @dragover="onColumnListDragOver($event, cwt.column.id, cwt.tasks.length)"
               @drop="onColumnListDrop($event, cwt.column.id, cwt.tasks.length)"
@@ -1564,49 +1987,57 @@ useAiRefresh(loadBoard)
                 />
                 <!-- Task card -->
                 <div
-                  class="relative bg-background border group/card transition-opacity cursor-grab active:cursor-grabbing active:border-primary/45 active:bg-accent/20"
-                  :class="[
-                    isCompactWidth ? 'rounded-xl p-4 min-h-[64px]' : 'rounded-lg p-3',
-                    isMobilePlatform ? 'touch-none select-none' : 'touch-pan-y',
-                    draggedTask?.id === task.id ? 'opacity-40' : ''
-                  ]"
+                  class="relative bg-background border rounded-lg p-3 group/card transition-opacity cursor-grab active:cursor-grabbing touch-none"
                   :data-task-card="task.id"
+                  :class="{
+                    'opacity-40': draggedTask?.id === task.id,
+                    'border-primary bg-primary/10 ring-1 ring-primary/40': selectedTaskIds.has(task.id),
+                  }"
                   @pointerdown="onTaskPointerDown($event, task)"
-                  @click="startEditTask(task)"
+                  @click.stop="onTaskCardClick($event)"
                 >
                   <!-- Drag handle + Title row -->
-                  <div class="flex items-start gap-2.5">
+                  <div class="flex items-start gap-1.5">
                     <div
-                      class="pt-0.5 flex-shrink-0 text-muted-foreground/50"
+                      class="pt-0.5 flex-shrink-0"
                       :data-task-drag-handle="task.id"
                     >
-                      <GripHorizontal class="w-4 h-4 group-hover/card:text-muted-foreground/70" />
+                      <GripHorizontal class="w-3.5 h-3.5 text-muted-foreground/40 group-hover/card:text-muted-foreground/70" />
                     </div>
                     <!-- Task title -->
-                    <template v-if="!isMobilePlatform && editingTaskId === task.id">
+                    <template v-if="editingTaskId === task.id">
                       <input
                         v-model="editTaskTitle"
                         :data-edit-input="task.id"
-                        class="flex-1 text-sm bg-transparent border-b border-primary outline-none"
+                        class="min-w-0 flex-1 pr-12 text-sm bg-transparent border-b border-primary outline-none"
                         @keydown="onEditTaskKeydown"
                         @blur="saveEditTask"
                       />
                     </template>
                     <template v-else>
                       <p
-                        class="flex-1 cursor-text text-sm leading-5"
+                        class="task-title-clamp min-w-0 flex-1 pr-12 text-sm leading-5 cursor-text"
                         :class="{ 'line-through text-muted-foreground': task.done }"
+                        :title="task.title"
+                        @click.stop="onTaskTitleClick($event, task)"
                       >{{ task.title }}</p>
                     </template>
+                  </div>
+                  <span
+                    v-if="selectedTaskIds.has(task.id)"
+                    class="absolute left-2 top-2 flex h-4 w-4 items-center justify-center rounded-full bg-primary text-[10px] text-primary-foreground"
+                  >
+                    <CheckCircle2 class="h-3 w-3" />
+                  </span>
+                  <div v-if="task.scheduled_start_at" class="mt-2 flex items-center gap-2 pl-5 text-xs text-muted-foreground">
+                    <span class="rounded-sm bg-secondary px-1.5 py-0.5 tabular-nums">{{ formatTaskScheduleTime(task) }}</span>
+                    <span v-if="task.repeat_type && task.repeat_type !== 'none'">{{ t('schedule.repeat') }}</span>
                   </div>
 
                   <!-- Complete + delete buttons -->
                   <button
-                    class="absolute rounded transition-colors hover:text-primary"
-                    :class="[
-                      isCompactWidth ? 'right-11 top-3 p-1 opacity-100' : 'top-2 right-8 opacity-0 group-hover/card:opacity-100 p-1',
-                      { 'opacity-100 text-primary': task.done },
-                    ]"
+                    class="absolute top-2 right-8 opacity-0 group-hover/card:opacity-100 p-1 rounded transition-colors hover:text-primary"
+                    :class="{ 'opacity-100 text-primary': task.done }"
                     :title="task.done ? t('tasks.reopenTask') : t('tasks.completeTask')"
                     @pointerdown.stop
                     @click.stop="toggleTaskDone(task)"
@@ -1615,8 +2046,7 @@ useAiRefresh(loadBoard)
                     <Circle v-else class="w-3.5 h-3.5" />
                   </button>
                   <button
-                    class="absolute rounded transition-colors hover:text-red-400"
-                    :class="isCompactWidth ? 'right-3 top-3 p-1 opacity-100' : 'top-2 right-2 opacity-0 group-hover/card:opacity-100 p-1'"
+                    class="absolute top-2 right-2 opacity-0 group-hover/card:opacity-100 p-1 rounded transition-colors hover:text-red-400"
                     @pointerdown.stop
                     @click.stop="deleteTask(task)"
                   >
@@ -1654,8 +2084,7 @@ useAiRefresh(loadBoard)
               <template v-else>
                 <button
                   v-if="!isSearching"
-                  class="w-full flex items-center gap-1.5 text-sm text-muted-foreground/50 hover:text-muted-foreground transition-colors rounded hover:bg-secondary/50"
-                  :class="isCompactWidth ? 'px-2 py-2' : 'px-1 py-1'"
+                  class="w-full flex items-center gap-1.5 px-1 py-1 text-sm text-muted-foreground/50 hover:text-muted-foreground transition-colors rounded hover:bg-secondary/50"
                   @click="startAddTaskToColumn(cwt.column.id)"
                 >
                   <Plus class="w-3.5 h-3.5" />
@@ -1667,7 +2096,7 @@ useAiRefresh(loadBoard)
 
           <!-- New column drop zone (only visible during drag) -->
           <div
-            v-if="!isSearching && draggedTask && !isMobilePlatform"
+            v-if="!isSearching && draggedTask"
             :data-new-column-drop-zone="group.project"
             class="absolute right-0 top-0 bottom-2 z-20 w-[200px] border-2 border-dashed rounded-lg flex flex-col items-center justify-center transition-colors min-h-[200px] shadow-sm backdrop-blur-sm"
             :class="dropTargetNewColumn === group.project ? 'border-primary bg-primary/10 scale-[1.02]' : 'border-muted-foreground/30 hover:border-muted-foreground/50'"
@@ -1682,15 +2111,68 @@ useAiRefresh(loadBoard)
           </div>
         </div>
       </div>
-      </template>
     </div>
 
+    <Transition
+      enter-active-class="transition-all duration-300 ease-out"
+      enter-from-class="opacity-0 translate-y-5"
+      leave-active-class="transition-all duration-200 ease-in"
+      leave-to-class="opacity-0 translate-y-5"
+    >
+      <div
+        v-if="selectedTaskCount > 0"
+        class="fixed bottom-6 left-1/2 z-40 flex max-w-[calc(100vw-2rem)] -translate-x-1/2 flex-wrap items-center gap-2 rounded-lg border bg-card px-4 py-3 shadow-lg"
+        @click.stop
+      >
+        <span class="mr-2 text-sm text-muted-foreground">{{ selectedCountLabel() }}</span>
+        <button class="inline-flex h-8 items-center gap-1.5 rounded-md border px-3 text-sm hover:bg-secondary" type="button" @click="bulkSetTasksDone(true)">
+          <CheckCircle2 class="h-4 w-4" />
+          {{ t('tasks.bulkComplete') }}
+        </button>
+        <button class="inline-flex h-8 items-center gap-1.5 rounded-md border px-3 text-sm hover:bg-secondary" type="button" @click="bulkSetTasksDone(false)">
+          <Circle class="h-4 w-4" />
+          {{ t('tasks.bulkReopen') }}
+        </button>
+        <select v-model="bulkMoveTargetColumnId" class="h-8 min-w-44 rounded-md border bg-background px-2 text-sm">
+          <option value="">{{ t('tasks.bulkMovePlaceholder') }}</option>
+          <option v-for="column in bulkMoveColumnOptions" :key="column.id" :value="column.id">
+            {{ column.label }}
+          </option>
+        </select>
+        <button class="inline-flex h-8 items-center gap-1.5 rounded-md border px-3 text-sm hover:bg-secondary disabled:opacity-50" type="button" :disabled="!bulkMoveTargetColumnId" @click="bulkMoveSelectedTasks">
+          {{ t('tasks.bulkMove') }}
+        </button>
+        <button class="inline-flex h-8 items-center gap-1.5 rounded-md border px-3 text-sm text-red-400 hover:bg-destructive/10" type="button" @click="bulkDeleteSelectedTasks">
+          <Trash2 class="h-4 w-4" />
+          {{ t('tasks.bulkDelete') }}
+        </button>
+        <button class="inline-flex h-8 w-8 items-center justify-center rounded-md border text-muted-foreground hover:bg-secondary" type="button" :title="t('tasks.clearSelection')" @click="clearTaskSelection">
+          <X class="h-4 w-4" />
+        </button>
+      </div>
+    </Transition>
+
+    <button
+      v-if="!isSearching"
+      class="fixed bottom-6 right-6 z-30 inline-flex h-11 items-center gap-2 rounded-full border bg-card px-4 text-sm font-medium shadow-lg transition-colors hover:bg-secondary"
+      type="button"
+      :title="t('tasks.today')"
+      @click="scrollToTodayGroup"
+    >
+      <CalendarDays class="h-4 w-4" />
+      {{ t('tasks.today') }}
+    </button>
+
     <!-- Toast -->
-    <Transition name="toast">
+    <Transition
+      enter-active-class="transition-all duration-300 ease-out"
+      enter-from-class="opacity-0 translate-y-5"
+      leave-active-class="transition-all duration-200 ease-in"
+      leave-to-class="opacity-0 translate-y-5"
+    >
       <div
         v-if="toastVisible"
-        class="fixed left-1/2 -translate-x-1/2 z-50 flex max-w-[calc(100vw-32px)] items-center gap-3 bg-card border rounded-lg shadow-lg px-4 py-3"
-        :class="isMobilePlatform ? 'bottom-[calc(var(--mobile-tabbar-height)+var(--mobile-safe-bottom)+16px)]' : 'bottom-6'"
+        class="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 bg-card border rounded-lg shadow-lg px-4 py-3"
       >
         <span class="text-sm">{{ toastMessage }}</span>
         <button
@@ -1700,141 +2182,5 @@ useAiRefresh(loadBoard)
         >{{ t('tasks.undo') }}</button>
       </div>
     </Transition>
-    <Teleport to="body">
-      <Transition name="modal">
-        <div
-          v-if="mobileEditingTask"
-          class="fixed inset-0 z-[90] flex items-end overflow-hidden bg-black/30 p-4 backdrop-blur-sm"
-          @click.self="saveEditTask"
-        >
-          <div class="max-h-[calc(100dvh-32px)] w-full overflow-y-auto rounded-2xl border bg-card p-4 shadow-2xl">
-            <h2 class="mb-3 text-sm font-semibold">{{ t('tasks.editTask') }}</h2>
-            <input
-              v-model="editTaskTitle"
-              data-mobile-task-edit-input
-              class="w-full rounded-xl border bg-background px-3 py-3 text-base outline-none focus:border-primary"
-              :placeholder="t('tasks.placeholder')"
-              @keydown="onEditTaskKeydown"
-            />
-            <label v-if="mobileEditingColumns.length" class="mt-3 block">
-              <span class="mb-1 block text-xs text-muted-foreground">{{ t('tasks.column') }}</span>
-              <select
-                v-model="mobileEditColumnId"
-                class="w-full rounded-xl border bg-background px-3 py-3 text-base outline-none focus:border-primary"
-              >
-                <option v-for="column in mobileEditingColumns" :key="column.column.id" :value="column.column.id">
-                  {{ column.column.name }}
-                </option>
-              </select>
-            </label>
-            <div class="mt-4 flex justify-end gap-2">
-              <button class="rounded-lg bg-secondary px-4 py-2 text-sm" @click="cancelEditTask">{{ t('common.cancel') }}</button>
-              <button class="rounded-lg bg-primary px-4 py-2 text-sm text-primary-foreground" @click="saveEditTask">{{ t('common.save') }}</button>
-            </div>
-          </div>
-        </div>
-      </Transition>
-    </Teleport>
-    <Teleport to="body">
-      <Transition name="modal">
-        <div
-          v-if="isPhoneTaskLayout && editingGroupProject"
-          class="fixed inset-0 z-[90] flex items-end overflow-hidden bg-black/30 p-4 backdrop-blur-sm"
-          @click.self="saveEditGroup"
-        >
-          <div class="w-full rounded-2xl border bg-card p-4 shadow-2xl">
-            <h2 class="mb-3 text-sm font-semibold">{{ t('tasks.renameGroup') }}</h2>
-            <input
-              v-model="editGroupName"
-              data-mobile-group-edit-input
-              class="w-full rounded-xl border bg-background px-3 py-3 text-base outline-none focus:border-primary"
-              :placeholder="t('tasks.groupName')"
-              :disabled="savingGroupRename"
-              @keydown="onEditGroupKeydown"
-            />
-            <div class="mt-4 flex justify-end gap-2">
-              <button class="rounded-lg bg-secondary px-4 py-2 text-sm" @click="cancelEditGroup">{{ t('common.cancel') }}</button>
-              <button class="rounded-lg bg-primary px-4 py-2 text-sm text-primary-foreground" @click="saveEditGroup">{{ t('common.save') }}</button>
-            </div>
-          </div>
-        </div>
-      </Transition>
-    </Teleport>
-    <Teleport to="body">
-      <Transition name="modal">
-        <div
-          v-if="isPhoneTaskLayout && addingColumnProject"
-          class="fixed inset-0 z-[90] flex items-end overflow-hidden bg-black/30 p-4 backdrop-blur-sm"
-          @click.self="newColumnName.trim() ? saveNewColumn() : cancelAddColumn()"
-        >
-          <div class="w-full rounded-2xl border bg-card p-4 shadow-2xl">
-            <h2 class="mb-3 text-sm font-semibold">{{ t('tasks.addColumn') }}</h2>
-            <input
-              v-model="newColumnName"
-              data-column-add-input
-              class="w-full rounded-xl border bg-background px-3 py-3 text-base outline-none focus:border-primary"
-              :placeholder="t('tasks.columnName')"
-              :disabled="savingNewColumn"
-              @keydown="onAddColumnKeydown"
-            />
-            <div class="mt-4 flex justify-end gap-2">
-              <button class="rounded-lg bg-secondary px-4 py-2 text-sm" @click="cancelAddColumn">{{ t('common.cancel') }}</button>
-              <button class="rounded-lg bg-primary px-4 py-2 text-sm text-primary-foreground" @click="saveNewColumn">{{ t('common.save') }}</button>
-            </div>
-          </div>
-        </div>
-      </Transition>
-    </Teleport>
-    <Teleport to="body">
-      <Transition name="modal">
-        <div
-          v-if="isPhoneTaskLayout && editingColumnId"
-          class="fixed inset-0 z-[90] flex items-end overflow-hidden bg-black/30 p-4 backdrop-blur-sm"
-          @click.self="saveEditColumn"
-        >
-          <div class="w-full rounded-2xl border bg-card p-4 shadow-2xl">
-            <h2 class="mb-3 text-sm font-semibold">{{ t('tasks.renameColumn') }}</h2>
-            <input
-              v-model="editColumnName"
-              data-mobile-column-edit-input
-              class="w-full rounded-xl border bg-background px-3 py-3 text-base outline-none focus:border-primary"
-              :placeholder="t('tasks.columnName')"
-              @keydown="onEditColumnKeydown"
-            />
-            <div class="mt-4 flex justify-end gap-2">
-              <button class="rounded-lg bg-secondary px-4 py-2 text-sm" @click="cancelEditColumn">{{ t('common.cancel') }}</button>
-              <button class="rounded-lg bg-primary px-4 py-2 text-sm text-primary-foreground" @click="saveEditColumn">{{ t('common.save') }}</button>
-            </div>
-          </div>
-        </div>
-      </Transition>
-    </Teleport>
-    <Teleport to="body">
-      <div
-        v-if="dragPreview"
-        class="pointer-events-none fixed left-0 top-0 z-[100] rounded-xl border border-primary/35 bg-card/95 px-3 py-2 text-sm shadow-2xl shadow-primary/20 backdrop-blur will-change-transform"
-        :style="dragPreviewStyle"
-      >
-        <div class="flex items-center gap-2">
-          <GripHorizontal class="h-4 w-4 shrink-0 text-primary" />
-          <div class="min-w-0">
-            <div class="truncate font-medium">{{ dragPreview.title }}</div>
-            <div v-if="dragPreview.subtitle" class="truncate text-[11px] text-muted-foreground">{{ dragPreview.subtitle }}</div>
-          </div>
-        </div>
-      </div>
-    </Teleport>
   </div>
 </template>
-
-<style scoped>
-.toast-enter-active,
-.toast-leave-active {
-  transition: all 0.3s ease;
-}
-.toast-enter-from,
-.toast-leave-to {
-  opacity: 0;
-  transform: translate(-50%, 20px);
-}
-</style>
