@@ -22,6 +22,7 @@ const settings = useSettingsStore()
 const { monitoring } = storeToRefs(clipboard)
 const { displayName, soundSettings } = storeToRefs(settings)
 const tasks = ref<Task[]>([])
+const calendarTasks = ref<Task[]>([])
 const editingId = ref<string | null>(null)
 const editTitle = ref('')
 const editingDisplayName = ref(false)
@@ -66,13 +67,28 @@ const pomodoroDisplay = computed(() => {
   }
 })
 
-const upcomingSchedules = computed(() => {
+const upcomingScheduleItems = computed(() => {
   const now = Date.now()
-  return schedules.value
-    .filter((schedule) => !schedule.done && new Date(schedule.scheduled_at).getTime() > now)
-    .sort((a, b) => new Date(a.scheduled_at).getTime() - new Date(b.scheduled_at).getTime())
-    .slice(0, 4)
+  const scheduleItems = schedules.value.map((schedule) => ({
+    id: `schedule-${schedule.id}`,
+    title: schedule.title,
+    at: schedule.scheduled_at,
+    done: schedule.done,
+  }))
+  const calendarItems = calendarTasks.value
+    .filter((task) => task.scheduled_start_at)
+    .map((task) => ({
+      id: `calendar-${task.id}`,
+      title: task.title,
+      at: task.scheduled_start_at!,
+      done: task.done,
+    }))
+
+  return [...scheduleItems, ...calendarItems]
+    .filter((item) => !item.done && new Date(item.at).getTime() > now)
+    .sort((a, b) => new Date(a.at).getTime() - new Date(b.at).getTime())
 })
+const upcomingSchedules = computed(() => upcomingScheduleItems.value.slice(0, 4))
 
 const nextAlarms = computed(() => {
   return alarms.value.filter((alarm) => alarm.active).slice(0, 4)
@@ -102,6 +118,7 @@ function scheduleDiff(value: string) {
 
 async function loadData() {
   try { tasks.value = await invoke('get_tasks') } catch {}
+  try { calendarTasks.value = await invoke('get_calendar_tasks') } catch {}
   try { notes.value = await invoke('get_notes') } catch {}
   try { schedules.value = await invoke('get_schedules') } catch {}
   try { entries.value = await invoke('get_clipboard_history', { limit: 5 }) } catch {}
@@ -400,7 +417,7 @@ watch(() => pendingTasks.value.length, (next) => {
           >
             <Clock class="w-3 h-3 text-muted-foreground shrink-0" />
             <span class="truncate font-medium">{{ schedule.title }}</span>
-            <span class="ml-auto text-muted-foreground shrink-0 tabular-nums">{{ scheduleDiff(schedule.scheduled_at) }}</span>
+            <span class="ml-auto text-muted-foreground shrink-0 tabular-nums">{{ scheduleDiff(schedule.at) }}</span>
           </div>
         </div>
       </button>
@@ -450,7 +467,7 @@ watch(() => pendingTasks.value.length, (next) => {
       </button>
       <button v-if="!isMobile" class="text-left bg-card rounded-xl p-4 border hover:shadow-sm transition" @click="router.push('/schedule')">
         <div class="text-orange-500 text-xs font-medium mb-2">{{ t('dashboard.upcoming') }}</div>
-        <div class="text-3xl font-bold tabular-nums">{{ schedules.filter(item => !item.done).length }}</div>
+        <div class="text-3xl font-bold tabular-nums">{{ upcomingScheduleItems.length }}</div>
       </button>
     </div>
 

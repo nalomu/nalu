@@ -84,6 +84,11 @@ interface TaskColumnOption {
 const HOUR_ROW_HEIGHT = 64
 const SELECTION_STEP_MINUTES = 10
 const WEEK_HEADER_HEIGHT = 68
+const WEEK_TIME_COLUMN_WIDTH = 64
+const WEEK_DAY_MIN_WIDTH = 96
+const WEEK_GRID_COLUMNS = `${WEEK_TIME_COLUMN_WIDTH}px repeat(7, minmax(${WEEK_DAY_MIN_WIDTH}px, 1fr))`
+const WEEK_EVENTS_GRID_COLUMNS = `repeat(7, minmax(${WEEK_DAY_MIN_WIDTH}px, 1fr))`
+const WEEK_MIN_WIDTH = WEEK_TIME_COLUMN_WIDTH + WEEK_DAY_MIN_WIDTH * 7
 const EVENT_AREA_PERCENT = 90
 const EVENT_CELL_INSET_X = 4
 const EVENT_CELL_INSET_Y = 4
@@ -369,15 +374,17 @@ function visibleRange() {
   }
 }
 
-function setViewMode(mode: ViewMode) {
+async function setViewMode(mode: ViewMode) {
   viewMode.value = mode
-  loadTasks()
-  scrollToCurrentTimeCell('auto')
+  await loadTasks()
+  await scrollToCurrentTimeCell('auto')
 }
 
-function goToday() {
+async function goToday() {
+  refreshCurrentTime()
   anchorDate.value = startOfDay(new Date())
-  loadTasks()
+  await loadTasks()
+  await scrollToCurrentTimeCell('smooth')
 }
 
 function goPrevious() {
@@ -1179,8 +1186,22 @@ async function scrollToCurrentTimeCell(behavior: ScrollBehavior = 'auto') {
     const targetTop = headerOffset + (minutes / 60) * HOUR_ROW_HEIGHT
     const centeredTop = targetTop - container.clientHeight * 0.35
     const maxTop = Math.max(0, container.scrollHeight - container.clientHeight)
+    const maxLeft = Math.max(0, container.scrollWidth - container.clientWidth)
+    let left = container.scrollLeft
+
+    if (viewMode.value === 'week') {
+      const todayIndex = weekDays.value.findIndex((day) => day.isToday)
+      if (todayIndex >= 0) {
+        const timelineWidth = Math.max(0, container.scrollWidth - WEEK_TIME_COLUMN_WIDTH)
+        const dayWidth = timelineWidth / 7
+        const todayCenter = WEEK_TIME_COLUMN_WIDTH + todayIndex * dayWidth + dayWidth / 2
+        left = Math.min(Math.max(todayCenter - container.clientWidth / 2, 0), maxLeft)
+      }
+    }
+
     container.scrollTo({
       top: Math.min(Math.max(centeredTop, 0), maxTop),
+      left,
       behavior,
     })
   })
@@ -1252,7 +1273,7 @@ useAiRefresh(loadTasks)
       <section ref="dayScrollRef" v-if="viewMode === 'day'" class="h-full select-none overflow-auto rounded-md border bg-card">
         <div class="relative min-w-[360px]">
           <div v-for="hour in hours" :key="hour" class="grid border-b last:border-b-0" :style="{ gridTemplateColumns: '64px minmax(0, 1fr)', minHeight: `${HOUR_ROW_HEIGHT}px` }">
-            <div class="border-r px-2 pt-2 text-right text-xs tabular-nums text-muted-foreground">
+            <div class="sticky left-0 z-10 border-r bg-card px-2 pt-2 text-right text-xs tabular-nums text-muted-foreground">
               {{ formatHour(hour) }}
             </div>
             <div class="relative cursor-cell px-3 py-2" :class="{ 'bg-primary/10': isSelectingCell(0, hour) }" @pointerdown="onHourPointerDown(0, anchorDate, hour, $event)" @pointermove="onHourPointerMove(0, hour, $event)">
@@ -1304,9 +1325,9 @@ useAiRefresh(loadTasks)
       </section>
 
       <section ref="weekScrollRef" v-else-if="viewMode === 'week'" class="h-full select-none overflow-auto rounded-md border bg-card">
-        <div class="relative min-w-[960px]">
-          <div class="sticky top-0 z-20 grid border-b bg-card" :style="{ gridTemplateColumns: '64px repeat(7, minmax(120px, 1fr))', minHeight: `${WEEK_HEADER_HEIGHT}px` }">
-            <div class="border-r"></div>
+        <div class="relative" :style="{ minWidth: `${WEEK_MIN_WIDTH}px` }">
+          <div class="sticky top-0 z-20 grid border-b bg-card" :style="{ gridTemplateColumns: WEEK_GRID_COLUMNS, minHeight: `${WEEK_HEADER_HEIGHT}px` }">
+            <div class="sticky left-0 z-30 border-r bg-card"></div>
             <div v-for="day in weekDays" :key="day.key" class="border-r px-2 py-3 text-left last:border-r-0">
               <div class="text-xs text-muted-foreground">{{ day.label }}</div>
               <div class="mt-1 inline-flex h-7 min-w-7 items-center justify-center rounded-full px-2 text-sm font-semibold" :class="day.isToday ? 'bg-primary text-primary-foreground' : ''">
@@ -1315,8 +1336,8 @@ useAiRefresh(loadTasks)
             </div>
           </div>
 
-          <div v-for="hour in hours" :key="hour" class="grid border-b last:border-b-0" :style="{ gridTemplateColumns: '64px repeat(7, minmax(120px, 1fr))', minHeight: `${HOUR_ROW_HEIGHT}px` }">
-            <div class="border-r px-2 pt-2 text-right text-xs tabular-nums text-muted-foreground">
+          <div v-for="hour in hours" :key="hour" class="grid border-b last:border-b-0" :style="{ gridTemplateColumns: WEEK_GRID_COLUMNS, minHeight: `${HOUR_ROW_HEIGHT}px` }">
+            <div class="sticky left-0 z-10 border-r bg-card px-2 pt-2 text-right text-xs tabular-nums text-muted-foreground">
               {{ formatHour(hour) }}
             </div>
             <div
@@ -1329,7 +1350,7 @@ useAiRefresh(loadTasks)
             >
             </div>
           </div>
-          <div data-schedule-layer="week" class="pointer-events-none absolute left-16 right-0 grid" :style="{ top: `${WEEK_HEADER_HEIGHT}px`, gridTemplateColumns: 'repeat(7, minmax(120px, 1fr))', height: `${HOUR_ROW_HEIGHT * 24}px` }">
+          <div data-schedule-layer="week" class="pointer-events-none absolute right-0 grid" :style="{ left: `${WEEK_TIME_COLUMN_WIDTH}px`, top: `${WEEK_HEADER_HEIGHT}px`, gridTemplateColumns: WEEK_EVENTS_GRID_COLUMNS, height: `${HOUR_ROW_HEIGHT * 24}px` }">
             <div v-for="(day, dayIndex) in weekDays" :key="`${day.key}-events`" class="relative border-r last:border-r-0">
               <div v-if="selectionPreviewStyle(dayIndex)" class="absolute left-2 right-2 z-10 rounded-md border border-primary/30 bg-primary/15" :style="selectionPreviewStyle(dayIndex)!"></div>
               <div v-if="dragPreviewStyleForDate(day.date)" class="absolute left-2 right-[10%] z-30 rounded-md border border-primary/50 bg-primary/20 shadow-sm" :style="dragPreviewStyleForDate(day.date)!"></div>
