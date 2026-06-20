@@ -30,6 +30,13 @@ export interface SoundSettings {
   alarm: SoundChoice;
 }
 
+export type TaskGroupNamingStrategy = "date" | "dateWeekday" | "monthDay" | "defaultName";
+
+export interface TaskGroupNamingSettings {
+  strategy: TaskGroupNamingStrategy;
+  fallbackName: string;
+}
+
 const defaultAiConfig: AiConfig = {
   provider: "deepseek",
   api_key: "",
@@ -51,6 +58,11 @@ const defaultSoundSettings: SoundSettings = {
   alarm: { type: "preset", id: "warm-chime" },
 };
 
+const defaultTaskGroupNaming: TaskGroupNamingSettings = {
+  strategy: "date",
+  fallbackName: "新分组",
+};
+
 export const useSettingsStore = defineStore("settings", () => {
   const locale = ref<Locale>((localStorage.getItem("nalu-locale") as Locale) || "zh");
   const theme = ref<ThemeMode>((localStorage.getItem("nalu-theme") as ThemeMode) || "system");
@@ -58,6 +70,7 @@ export const useSettingsStore = defineStore("settings", () => {
   const clipboardRetention = ref<ClipboardRetention>({ ...defaultClipboardRetention });
   const soundSettings = ref<SoundSettings>({ ...defaultSoundSettings });
   const clipboardShortcut = ref(localStorage.getItem("nalu-clipboard-shortcut") || "CmdOrCtrl+Shift+V");
+  const taskGroupNaming = ref<TaskGroupNamingSettings>({ ...defaultTaskGroupNaming });
 
   const saved = localStorage.getItem("nalu-ai-config");
   if (saved) {
@@ -77,6 +90,13 @@ export const useSettingsStore = defineStore("settings", () => {
   if (savedSoundSettings) {
     try {
       soundSettings.value = { ...defaultSoundSettings, ...JSON.parse(savedSoundSettings) };
+    } catch {}
+  }
+
+  const savedTaskGroupNaming = localStorage.getItem("nalu-task-group-naming");
+  if (savedTaskGroupNaming) {
+    try {
+      taskGroupNaming.value = { ...defaultTaskGroupNaming, ...JSON.parse(savedTaskGroupNaming) };
     } catch {}
   }
 
@@ -102,6 +122,12 @@ export const useSettingsStore = defineStore("settings", () => {
     localStorage.setItem("nalu-sound-settings", JSON.stringify(soundSettings.value));
   }
 
+  function saveTaskGroupNaming() {
+    const fallbackName = taskGroupNaming.value.fallbackName.trim() || defaultTaskGroupNaming.fallbackName;
+    taskGroupNaming.value = { ...taskGroupNaming.value, fallbackName };
+    localStorage.setItem("nalu-task-group-naming", JSON.stringify(taskGroupNaming.value));
+  }
+
   function setClipboardShortcut(value: string) {
     clipboardShortcut.value = value;
     localStorage.setItem("nalu-clipboard-shortcut", value);
@@ -109,5 +135,5 @@ export const useSettingsStore = defineStore("settings", () => {
 
   const cleanupTheme = initTheme();
 
-  return { locale, theme, aiConfig, clipboardRetention, soundSettings, clipboardShortcut, setLocale, setThemeMode, saveAiConfig, saveClipboardRetention, saveSoundSettings, setClipboardShortcut, cleanupTheme };
+  return { locale, theme, aiConfig, clipboardRetention, soundSettings, clipboardShortcut, taskGroupNaming, setLocale, setThemeMode, saveAiConfig, saveClipboardRetention, saveSoundSettings, saveTaskGroupNaming, setClipboardShortcut, cleanupTheme };
 });

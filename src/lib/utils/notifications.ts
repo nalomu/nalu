@@ -12,8 +12,10 @@ import { sendNotification } from "@tauri-apps/plugin-notification";
 import { playAlertChime, startLoopingAlert, stopLoopingAlert } from "$lib/utils/alertSound";
 import { showAlert, dismissAlert } from "$lib/stores/alertStore";
 import { useSettingsStore } from "$lib/stores/settingsStore";
+import type { Task } from "$lib/types";
 
 let initialized = false;
+const notifiedScheduleTaskIds = new Set<string>();
 
 // Guard against duplicate alarm fires (e.g. queued events from hidden webview)
 let activeAlarmId: string | null = null;
@@ -67,6 +69,41 @@ function resumePomodoro() {
   });
 }
 
+function formatLocalDateTime(date: Date) {
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
+
+async function checkScheduleReminders() {
+  const now = Date.now();
+  const end = new Date(now + 60 * 60 * 1000);
+  let tasks: Task[];
+
+  try {
+    const result = await invoke<Task[]>("get_calendar_tasks", {
+      startAt: formatLocalDateTime(new Date(now - 60 * 60 * 1000)),
+      endAt: formatLocalDateTime(end),
+    });
+    tasks = Array.isArray(result) ? result : [];
+  } catch (error) {
+    console.error("Failed to check schedule reminders", error);
+    return;
+  }
+
+  for (const task of tasks) {
+    if (task.done || !task.scheduled_start_at || notifiedScheduleTaskIds.has(task.id)) continue;
+    if ((task.reminder_minutes ?? 0) <= 0) continue;
+
+    const startAt = new Date(task.scheduled_start_at).getTime();
+    const reminderAt = startAt - task.reminder_minutes * 60_000;
+    if (now >= reminderAt && now <= startAt + 30_000) {
+      sendNotification({ title: "日程提醒", body: `${task.title} - 即将开始` });
+      playAlertChime(useSettingsStore().soundSettings.alarm);
+      notifiedScheduleTaskIds.add(task.id);
+    }
+  }
+}
+
 /**
  * Initialize global event listeners for pomodoro and alarm.
  * Safe to call multiple times — only initializes once.
@@ -104,4 +141,10 @@ export async function initGlobalNotifications() {
   await listen<AlarmPayload>("alarm-triggered", (event) => {
     fireAlarm(event.payload);
   });
+
+  // ── Schedule: poll calendar tasks globally so reminders work on every page ──
+  void checkScheduleReminders();
+  setInterval(() => {
+    void checkScheduleReminders();
+  }, 30_000);
 }

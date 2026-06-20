@@ -42,7 +42,7 @@ pub fn add_schedule(
     reminder_minutes: Option<i32>,
 ) -> Result<Schedule, String> {
     let id = uuid::Uuid::new_v4().to_string();
-    let reminder_minutes = reminder_minutes.unwrap_or(5);
+    let reminder_minutes = reminder_minutes.unwrap_or(0);
 
     let db = get_connection()?;
     let conn = db.as_ref().unwrap();
