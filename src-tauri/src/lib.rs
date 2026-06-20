@@ -53,6 +53,14 @@ fn runtime_platform() -> &'static str {
     }
 }
 
+fn theme_to_string(theme: tauri::Theme) -> &'static str {
+    match theme {
+        tauri::Theme::Light => "light",
+        tauri::Theme::Dark => "dark",
+        _ => "light",
+    }
+}
+
 #[cfg(target_os = "macos")]
 panel!(ClipboardPanel {
     config: {
@@ -211,6 +219,15 @@ fn toggle_clipboard_popup(app: tauri::AppHandle) -> Result<(), String> {
 #[tauri::command]
 fn check_path_exists(path: String) -> Result<bool, String> {
     Ok(std::path::Path::new(&path).exists())
+}
+
+#[tauri::command]
+fn get_system_theme(window: tauri::WebviewWindow) -> Result<String, String> {
+    window
+        .theme()
+        .map(theme_to_string)
+        .map(str::to_string)
+        .map_err(|e| format!("get system theme failed: {e}"))
 }
 
 #[derive(serde::Serialize)]
@@ -955,6 +972,7 @@ pub fn run() {
             commands::sync::sync_get_config,
             commands::sync::sync_disconnect,
             runtime_platform,
+            get_system_theme,
             update_tray_menu,
         ])
         // Setup
@@ -1001,19 +1019,26 @@ pub fn run() {
             if let Some(main) = app.get_webview_window("main") {
                 let main_clone = main.clone();
                 main.on_window_event(move |event| {
-                    if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                        api.prevent_close();
-                        #[cfg(mobile)]
-                        {
-                            let _ = main_clone.emit("nalu-back-requested", ());
-                            tracing::info!("[MainWindow] mobile back intercepted");
-                            return;
+                    match event {
+                        tauri::WindowEvent::CloseRequested { api, .. } => {
+                            api.prevent_close();
+                            #[cfg(mobile)]
+                            {
+                                let _ = main_clone.emit("nalu-back-requested", ());
+                                tracing::info!("[MainWindow] mobile back intercepted");
+                                return;
+                            }
+                            #[cfg(desktop)]
+                            {
+                                let _ = main_clone.hide();
+                                tracing::info!("[MainWindow] close intercepted → hidden");
+                            }
                         }
-                        #[cfg(desktop)]
-                        {
-                            let _ = main_clone.hide();
-                            tracing::info!("[MainWindow] close intercepted → hidden");
+                        tauri::WindowEvent::ThemeChanged(theme) => {
+                            let theme = theme_to_string(*theme).to_string();
+                            let _ = main_clone.emit("nalu://system-theme-changed", theme);
                         }
+                        _ => {}
                     }
                 });
             }

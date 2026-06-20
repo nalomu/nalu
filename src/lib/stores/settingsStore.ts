@@ -1,6 +1,6 @@
 import { defineStore } from "pinia";
 import { ref } from "vue";
-import { type ThemeMode, setTheme as applyTheme, initTheme } from "$lib/utils/theme";
+import { type ThemeMode, setTheme as applyTheme } from "$lib/utils/theme";
 
 type Locale = "zh" | "en";
 
@@ -69,9 +69,14 @@ const defaultTaskGroupNaming: TaskGroupNamingSettings = {
   fallbackName: "新分组",
 };
 
+function readThemeMode(): ThemeMode {
+  const stored = localStorage.getItem("nalu-theme");
+  return stored === "light" || stored === "dark" || stored === "system" ? stored : "system";
+}
+
 export const useSettingsStore = defineStore("settings", () => {
   const locale = ref<Locale>((localStorage.getItem("nalu-locale") as Locale) || "zh");
-  const theme = ref<ThemeMode>((localStorage.getItem("nalu-theme") as ThemeMode) || "system");
+  const theme = ref<ThemeMode>(readThemeMode());
   const aiConfig = ref<AiConfig>({ ...defaultAiConfig });
   const clipboardRetention = ref<ClipboardRetention>({ ...defaultClipboardRetention });
   const soundSettings = ref<SoundSettings>({ ...defaultSoundSettings });
@@ -146,7 +151,5 @@ export const useSettingsStore = defineStore("settings", () => {
     localStorage.setItem("nalu-clipboard-shortcut", value);
   }
 
-  const cleanupTheme = initTheme();
-
-  return { locale, theme, aiConfig, clipboardRetention, soundSettings, clipboardShortcut, taskGroupNaming, setLocale, setThemeMode, saveAiConfig, saveClipboardRetention, saveSoundSettings, saveTaskGroupNaming, setClipboardShortcut, cleanupTheme };
+  return { locale, theme, aiConfig, clipboardRetention, soundSettings, clipboardShortcut, taskGroupNaming, setLocale, setThemeMode, saveAiConfig, saveClipboardRetention, saveSoundSettings, saveTaskGroupNaming, setClipboardShortcut };
 });

@@ -8,9 +8,11 @@
     <script>
       // Anti-FOUC: apply dark class before first paint based on saved theme preference.
       (function () {
-        var t = localStorage.getItem("nalu-theme") || "system";
-        var dark = t === "dark" || (t === "system" && matchMedia("(prefers-color-scheme:dark)").matches);
-        if (dark) document.documentElement.classList.add("dark");
+        var stored = localStorage.getItem("nalu-theme");
+        var t = stored === "light" || stored === "dark" || stored === "system" ? stored : "system";
+        var dark = t === "dark" || (t === "system" && matchMedia("(prefers-color-scheme: dark)").matches);
+        document.documentElement.classList.toggle("dark", dark);
+        document.documentElement.style.colorScheme = dark ? "dark" : "light";
       })();
     </script>
   </head>

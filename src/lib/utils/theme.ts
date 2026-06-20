@@ -1,20 +1,42 @@
 export type ThemeMode = "light" | "dark" | "system";
 
 const STORAGE_KEY = "nalu-theme";
-const darkMedia = window.matchMedia("(prefers-color-scheme: dark)");
+const DARK_MEDIA_QUERY = "(prefers-color-scheme: dark)";
+const SYSTEM_THEME_CHANGED_EVENT = "nalu://system-theme-changed";
+
+type ResolvedTheme = "light" | "dark";
+type LegacyMediaQueryList = MediaQueryList & {
+  addListener?: (listener: (event: MediaQueryListEvent) => void) => void;
+  removeListener?: (listener: (event: MediaQueryListEvent) => void) => void;
+};
+
+let systemThemeOverride: ResolvedTheme | null = null;
+
+function darkMedia(): LegacyMediaQueryList {
+  return window.matchMedia(DARK_MEDIA_QUERY) as LegacyMediaQueryList;
+}
 
 function isDarkPreferred(): boolean {
-  return darkMedia.matches;
+  if (systemThemeOverride) return systemThemeOverride === "dark";
+  return darkMedia().matches;
 }
 
 function apply(mode: ThemeMode): void {
   const shouldDark = mode === "dark" || (mode === "system" && isDarkPreferred());
   document.documentElement.classList.toggle("dark", shouldDark);
+  document.documentElement.style.colorScheme = shouldDark ? "dark" : "light";
 }
 
 /** Read the stored theme (defaults to "system"). */
 function read(): ThemeMode {
-  return (localStorage.getItem(STORAGE_KEY) as ThemeMode) || "system";
+  const stored = localStorage.getItem(STORAGE_KEY);
+  return stored === "light" || stored === "dark" || stored === "system" ? stored : "system";
+}
+
+function applySystemTheme(theme: ResolvedTheme | null | undefined): void {
+  if (theme !== "light" && theme !== "dark") return;
+  systemThemeOverride = theme;
+  if (read() === "system") apply("system");
 }
 
 /** Persist and apply a new theme mode. */
@@ -32,8 +54,49 @@ export function initTheme(): () => void {
   const handler = () => {
     if (read() === "system") apply("system");
   };
-  darkMedia.addEventListener("change", handler);
-  return () => darkMedia.removeEventListener("change", handler);
+  const media = darkMedia();
+  const supportsModernMediaListener = typeof media.addEventListener === "function";
+  const cleanupMedia = supportsModernMediaListener
+    ? () => media.removeEventListener("change", handler)
+    : () => media.removeListener?.(handler);
+
+  let cleanupTauriTheme: (() => void) | undefined;
+  let cleanupNaluTheme: (() => void) | undefined;
+
+  if (supportsModernMediaListener) {
+    media.addEventListener("change", handler);
+  } else {
+    media.addListener?.(handler);
+  }
+
+  void import("@tauri-apps/api/window")
+    .then(async ({ getCurrentWindow }) => {
+      const window = getCurrentWindow();
+      applySystemTheme(await window.theme());
+      cleanupTauriTheme = await window.onThemeChanged(({ payload }) => {
+        applySystemTheme(payload);
+      });
+    })
+    .catch((error) => {
+      console.warn("[theme] Tauri window theme unavailable", error);
+    });
+
+  void Promise.all([import("@tauri-apps/api/core"), import("@tauri-apps/api/event")])
+    .then(async ([{ invoke }, { listen }]) => {
+      applySystemTheme(await invoke<ResolvedTheme>("get_system_theme"));
+      cleanupNaluTheme = await listen<ResolvedTheme>(SYSTEM_THEME_CHANGED_EVENT, ({ payload }) => {
+        applySystemTheme(payload);
+      });
+    })
+    .catch((error) => {
+      console.warn("[theme] Tauri system theme command unavailable", error);
+    });
+
+  return () => {
+    cleanupMedia();
+    cleanupTauriTheme?.();
+    cleanupNaluTheme?.();
+  };
 }
 
 /** Returns the currently effective theme ("light" | "dark"). */
