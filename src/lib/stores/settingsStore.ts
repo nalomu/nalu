@@ -69,6 +69,8 @@ const defaultTaskGroupNaming: TaskGroupNamingSettings = {
   fallbackName: "新分组",
 };
 
+const DEFAULT_DISPLAY_NAME = "nalomu";
+
 function readThemeMode(): ThemeMode {
   const stored = localStorage.getItem("nalu-theme");
   return stored === "light" || stored === "dark" || stored === "system" ? stored : "system";
@@ -77,6 +79,7 @@ function readThemeMode(): ThemeMode {
 export const useSettingsStore = defineStore("settings", () => {
   const locale = ref<Locale>((localStorage.getItem("nalu-locale") as Locale) || "zh");
   const theme = ref<ThemeMode>(readThemeMode());
+  const displayName = ref(localStorage.getItem("nalu-display-name") || DEFAULT_DISPLAY_NAME);
   const aiConfig = ref<AiConfig>({ ...defaultAiConfig });
   const clipboardRetention = ref<ClipboardRetention>({ ...defaultClipboardRetention });
   const soundSettings = ref<SoundSettings>({ ...defaultSoundSettings });
@@ -128,6 +131,12 @@ export const useSettingsStore = defineStore("settings", () => {
     applyTheme(value);
   }
 
+  function setDisplayName(value: string) {
+    const name = value.trim() || DEFAULT_DISPLAY_NAME;
+    displayName.value = name;
+    localStorage.setItem("nalu-display-name", name);
+  }
+
   function saveAiConfig() {
     localStorage.setItem("nalu-ai-config", JSON.stringify(aiConfig.value));
   }
@@ -151,5 +160,5 @@ export const useSettingsStore = defineStore("settings", () => {
     localStorage.setItem("nalu-clipboard-shortcut", value);
   }
 
-  return { locale, theme, aiConfig, clipboardRetention, soundSettings, clipboardShortcut, taskGroupNaming, setLocale, setThemeMode, saveAiConfig, saveClipboardRetention, saveSoundSettings, saveTaskGroupNaming, setClipboardShortcut };
+  return { locale, theme, displayName, aiConfig, clipboardRetention, soundSettings, clipboardShortcut, taskGroupNaming, setLocale, setThemeMode, setDisplayName, saveAiConfig, saveClipboardRetention, saveSoundSettings, saveTaskGroupNaming, setClipboardShortcut };
 });

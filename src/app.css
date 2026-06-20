@@ -36,6 +36,11 @@
   --ring: #7138ed;
   --radius: 0.75rem;
   --brand-gradient: linear-gradient(135deg, #1d29bd 0%, #7138ed 52%, #7082f8 100%);
+  --scrollbar-track: #f1eff6;
+  --scrollbar-thumb: #c9c3d8;
+  --scrollbar-thumb-hover: #aca4c1;
+  --range-track: #e2ddec;
+  --range-thumb-shadow: 0 1px 4px rgb(26 22 38 / 0.18);
 }
 
 .dark {
@@ -60,6 +65,11 @@
   --border: #302a3d;
   --input: #302a3d;
   --ring: #8f63f4;
+  --scrollbar-track: #171320;
+  --scrollbar-thumb: #4b425c;
+  --scrollbar-thumb-hover: #665a7a;
+  --range-track: #383045;
+  --range-thumb-shadow: 0 1px 6px rgb(0 0 0 / 0.4);
 }
 
 /* Map semantic tokens → Tailwind utilities (bg-background, text-muted-foreground, border-border, bg-primary, rounded-lg …) */
@@ -103,6 +113,95 @@
   body {
     background-color: var(--background);
     color: var(--foreground);
+  }
+
+  html {
+    scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+    scrollbar-width: thin;
+  }
+
+  *::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  *::-webkit-scrollbar-track {
+    background: var(--scrollbar-track);
+  }
+
+  *::-webkit-scrollbar-thumb {
+    background-color: var(--scrollbar-thumb);
+    border: 2px solid var(--scrollbar-track);
+    border-radius: 999px;
+  }
+
+  *::-webkit-scrollbar-thumb:hover {
+    background-color: var(--scrollbar-thumb-hover);
+  }
+
+  input[type="range"] {
+    -webkit-appearance: none;
+    appearance: none;
+    height: 1.5rem;
+    cursor: pointer;
+    accent-color: var(--primary);
+    background: transparent;
+  }
+
+  input[type="range"]:disabled {
+    cursor: not-allowed;
+    opacity: 0.55;
+  }
+
+  input[type="range"]::-webkit-slider-runnable-track {
+    height: 0.5rem;
+    background: var(--range-track);
+    border-radius: 999px;
+  }
+
+  input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 1rem;
+    height: 1rem;
+    margin-top: -0.25rem;
+    background: var(--primary);
+    border: 2px solid var(--background);
+    border-radius: 999px;
+    box-shadow: var(--range-thumb-shadow);
+  }
+
+  input[type="range"]:focus-visible {
+    outline: none;
+  }
+
+  input[type="range"]:focus-visible::-webkit-slider-thumb {
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--ring) 24%, transparent), var(--range-thumb-shadow);
+  }
+
+  input[type="range"]::-moz-range-track {
+    height: 0.5rem;
+    background: var(--range-track);
+    border-radius: 999px;
+  }
+
+  input[type="range"]::-moz-range-progress {
+    height: 0.5rem;
+    background: var(--primary);
+    border-radius: 999px;
+  }
+
+  input[type="range"]::-moz-range-thumb {
+    width: 1rem;
+    height: 1rem;
+    background: var(--primary);
+    border: 2px solid var(--background);
+    border-radius: 999px;
+    box-shadow: var(--range-thumb-shadow);
+  }
+
+  input[type="range"]:focus-visible::-moz-range-thumb {
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--ring) 24%, transparent), var(--range-thumb-shadow);
   }
 
   /* Tailwind v4 defaults interactive elements to cursor: default.

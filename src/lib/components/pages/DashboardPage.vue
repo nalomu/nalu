@@ -20,10 +20,12 @@ const { isMobile, isMobilePlatform, isRouteEnabled } = useMobile()
 const clipboard = useClipboardStore()
 const settings = useSettingsStore()
 const { monitoring } = storeToRefs(clipboard)
-const { soundSettings } = storeToRefs(settings)
+const { displayName, soundSettings } = storeToRefs(settings)
 const tasks = ref<Task[]>([])
 const editingId = ref<string | null>(null)
 const editTitle = ref('')
+const editingDisplayName = ref(false)
+const displayNameDraft = ref(displayName.value)
 const notes = ref<Note[]>([])
 const schedules = ref<Schedule[]>([])
 const entries = ref<ClipboardEntry[]>([])
@@ -140,6 +142,39 @@ function onEditKeydown(e: KeyboardEvent) {
   else if (e.key === 'Escape') cancelEdit()
 }
 
+function startDisplayNameEdit() {
+  editingDisplayName.value = true
+  displayNameDraft.value = displayName.value
+  nextTick(() => {
+    const input = document.querySelector('[data-dashboard-display-name]') as HTMLInputElement
+    input?.focus()
+    input?.select()
+  })
+}
+
+function saveDisplayNameDraft() {
+  settings.setDisplayName(displayNameDraft.value)
+  displayNameDraft.value = displayName.value
+}
+
+function stopDisplayNameEdit() {
+  saveDisplayNameDraft()
+  editingDisplayName.value = false
+}
+
+function onDisplayNameInput(event: Event) {
+  displayNameDraft.value = event.target instanceof HTMLInputElement ? event.target.value : displayNameDraft.value
+  if (displayNameDraft.value.trim()) settings.setDisplayName(displayNameDraft.value)
+}
+
+function onDisplayNameKeydown(event: KeyboardEvent) {
+  if (event.key === 'Enter') stopDisplayNameEdit()
+  else if (event.key === 'Escape') {
+    displayNameDraft.value = displayName.value
+    editingDisplayName.value = false
+  }
+}
+
 async function togglePomodoro() {
   if (pomodoro.value?.is_running) {
     pomodoro.value = await invoke('pomodoro_pause')
@@ -197,7 +232,29 @@ watch(() => pendingTasks.value.length, (next) => {
   <div class="max-w-4xl mx-auto px-6 py-8">
     <header class="mb-8">
       <h1 class="text-2xl font-bold tracking-tight">{{ t('dashboard.title') }}</h1>
-      <p class="text-sm text-muted-foreground mt-1">{{ t('dashboard.welcome') }}, Nalomu</p>
+      <div class="mt-1 flex items-center gap-1 text-sm text-muted-foreground">
+        <span>{{ t('dashboard.welcome') }},</span>
+        <input
+          v-if="editingDisplayName"
+          data-dashboard-display-name
+          class="h-7 w-32 rounded-md border bg-background px-2 text-sm font-medium text-foreground outline-none transition-[border-color,box-shadow] focus:border-primary focus:ring-2 focus:ring-primary/20"
+          :value="displayNameDraft"
+          maxlength="40"
+          aria-label="Display name"
+          @input="onDisplayNameInput"
+          @blur="stopDisplayNameEdit"
+          @keydown="onDisplayNameKeydown"
+        />
+        <button
+          v-else
+          class="rounded-md px-1 font-medium text-foreground transition-colors hover:bg-secondary hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+          type="button"
+          :title="displayName"
+          @click="startDisplayNameEdit"
+        >
+          {{ displayName }}
+        </button>
+      </div>
     </header>
 
     <!-- Quick controls -->
