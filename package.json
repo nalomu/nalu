@@ -15,6 +15,7 @@
     "test:watch": "vitest",
     "test:e2e": "playwright test",
     "test:all": "pnpm test && cd src-tauri && cargo test --lib && cd .. && pnpm test:e2e",
+    "docs:screenshots": "node scripts/generate-readme-screenshots.mjs",
     "docs:dev": "vuepress dev docs",
     "docs:build": "vuepress build docs",
     "tauri:dev": "tauri dev",
