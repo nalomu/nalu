@@ -1011,8 +1011,8 @@ pub fn run() {
                         }
                         #[cfg(desktop)]
                         {
-                        let _ = main_clone.hide();
-                        tracing::info!("[MainWindow] close intercepted → hidden");
+                            let _ = main_clone.hide();
+                            tracing::info!("[MainWindow] close intercepted → hidden");
                         }
                     }
                 });
