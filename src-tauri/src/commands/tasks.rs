@@ -878,16 +878,15 @@ pub fn restore_tasks(snapshots: Vec<TaskSnapshot>) -> Result<Vec<Task>, String> 
 
 #[tauri::command]
 pub fn bulk_move_tasks(ids: Vec<String>, target_column_id: String) -> Result<Vec<Task>, String> {
-    let mut position = {
+    let start_position = {
         let db = get_connection()?;
         let conn = db.as_ref().unwrap();
         next_task_position(conn, &target_column_id)?
     };
     let mut moved = Vec::new();
-    for id in ids {
-        let task = move_task(id, target_column_id.clone(), position)?;
+    for (offset, id) in ids.into_iter().enumerate() {
+        let task = move_task(id, target_column_id.clone(), start_position + offset as i64)?;
         moved.push(task);
-        position += 1;
     }
     Ok(moved)
 }
@@ -1379,13 +1378,13 @@ pub fn update_calendar_task(
     )
     .map_err(|e| e.to_string())?;
 
-    if repeat_type != "none" {
-        if let Some(series_id) = &series_id {
-            if scope.as_deref() == Some("future") {
-                delete_future_instances(conn, series_id, sequence.unwrap_or(0) + 1)?;
-            }
-            generate_instances_for_series(conn, series_id, &id)?;
+    if repeat_type != "none"
+        && let Some(series_id) = &series_id
+    {
+        if scope.as_deref() == Some("future") {
+            delete_future_instances(conn, series_id, sequence.unwrap_or(0) + 1)?;
         }
+        generate_instances_for_series(conn, series_id, &id)?;
     }
 
     load_task(conn, &id)
@@ -1396,19 +1395,19 @@ pub fn remove_task_from_schedule(id: String, scope: Option<String>) -> Result<()
     let db = get_connection()?;
     let conn = db.as_ref().unwrap();
     let task = load_task(conn, &id)?;
-    if scope.as_deref() == Some("future") {
-        if let Some(series_id) = task.recurrence_series_id {
-            conn.execute(
-                "UPDATE tasks SET scheduled_start_at = NULL, scheduled_end_at = NULL, reminder_minutes = 0,
+    if scope.as_deref() == Some("future")
+        && let Some(series_id) = task.recurrence_series_id
+    {
+        conn.execute(
+            "UPDATE tasks SET scheduled_start_at = NULL, scheduled_end_at = NULL, reminder_minutes = 0,
                  repeat_type = 'none', recurrence_series_id = NULL, recurrence_sequence = NULL,
                  recurrence_origin_at = NULL, recurrence_detached = 1, updated_at = datetime('now')
                  WHERE recurrence_series_id = ?1 AND COALESCE(recurrence_sequence,0) >= ?2",
-                rusqlite::params![series_id, task.recurrence_sequence.unwrap_or(0)],
-            )
-            .map_err(|e| e.to_string())?;
-            deactivate_series(conn, &series_id)?;
-            return Ok(());
-        }
+            rusqlite::params![series_id, task.recurrence_sequence.unwrap_or(0)],
+        )
+        .map_err(|e| e.to_string())?;
+        deactivate_series(conn, &series_id)?;
+        return Ok(());
     }
     conn.execute(
         "UPDATE tasks SET scheduled_start_at = NULL, scheduled_end_at = NULL, reminder_minutes = 0,
@@ -1454,16 +1453,16 @@ pub fn delete_recurring_tasks(id: String, scope: String) -> Result<(), String> {
     let db = get_connection()?;
     let conn = db.as_ref().unwrap();
     let task = load_task(conn, &id)?;
-    if scope == "future" {
-        if let Some(series_id) = task.recurrence_series_id {
-            conn.execute(
-                "DELETE FROM tasks WHERE recurrence_series_id = ?1 AND COALESCE(recurrence_sequence,0) >= ?2",
-                rusqlite::params![series_id, task.recurrence_sequence.unwrap_or(0)],
-            )
-            .map_err(|e| e.to_string())?;
-            deactivate_series(conn, &series_id)?;
-            return Ok(());
-        }
+    if scope == "future"
+        && let Some(series_id) = task.recurrence_series_id
+    {
+        conn.execute(
+            "DELETE FROM tasks WHERE recurrence_series_id = ?1 AND COALESCE(recurrence_sequence,0) >= ?2",
+            rusqlite::params![series_id, task.recurrence_sequence.unwrap_or(0)],
+        )
+        .map_err(|e| e.to_string())?;
+        deactivate_series(conn, &series_id)?;
+        return Ok(());
     }
     conn.execute("DELETE FROM tasks WHERE id = ?1", rusqlite::params![id])
         .map_err(|e| e.to_string())?;
