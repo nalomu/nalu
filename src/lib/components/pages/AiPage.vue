@@ -7,7 +7,7 @@ import { Send, LoaderCircle, Bot, User, Brain, Wrench, Sparkles } from 'lucide-v
 import { useSettingsStore } from '$lib/stores/settingsStore'
 import { useI18n } from '$lib/i18n'
 
-type ContextKey = 'tasks' | 'notes' | 'schedules' | 'alarms';
+type ContextKey = 'tasks' | 'calendarTasks' | 'notes' | 'schedules' | 'alarms';
 type AiContext = Record<ContextKey, ContextItem[]>;
 type AiActionCommand = keyof typeof ACTION_LABELS;
 
@@ -38,6 +38,11 @@ const ACTION_LABELS = {
   update_task_content: 'Task updated',
   update_task_progress: 'Progress updated',
   delete_task: 'Task deleted',
+  create_calendar_task: 'Calendar task created',
+  update_calendar_task: 'Calendar task updated',
+  remove_task_from_schedule: 'Task removed from schedule',
+  cancel_task_recurrence: 'Recurrence cancelled',
+  delete_recurring_tasks: 'Recurring tasks deleted',
   create_task_group: 'Group created',
   delete_task_group: 'Group deleted',
   complete_task_group: 'Group completed',
@@ -49,6 +54,7 @@ const ACTION_LABELS = {
   update_note: 'Note updated',
   delete_note: 'Note deleted',
   add_schedule: 'Schedule created',
+  toggle_schedule: 'Schedule toggled',
   delete_schedule: 'Schedule deleted',
   add_alarm: 'Alarm created',
   delete_alarm: 'Alarm deleted',
@@ -61,6 +67,7 @@ const CONTEXT_LOADERS: Array<{
   params?: Record<string, unknown>;
 }> = [
   { key: 'tasks', command: 'get_tasks' },
+  { key: 'calendarTasks', command: 'get_calendar_tasks' },
   { key: 'notes', command: 'get_notes' },
   { key: 'schedules', command: 'get_schedules' },
   { key: 'alarms', command: 'get_alarms' }
@@ -68,6 +75,7 @@ const CONTEXT_LOADERS: Array<{
 
 const CONTEXT_LIMITS: Record<ContextKey, number> = {
   tasks: 20,
+  calendarTasks: 20,
   notes: 12,
   schedules: 20,
   alarms: 20
@@ -89,6 +97,7 @@ const messagesContainer = ref<HTMLDivElement>()
 const textareaRef = ref<HTMLTextAreaElement>()
 const context = ref<AiContext>({
   tasks: [],
+  calendarTasks: [],
   notes: [],
   schedules: [],
   alarms: []

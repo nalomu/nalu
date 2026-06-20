@@ -309,6 +309,35 @@ The app invokes these as Tauri commands with those parameter names — do not in
   Example:
   [ACTION] {{"command":"delete_task","params":{{"id":"5b6f-..."}}}} [/ACTION]
 
+### Calendar Tasks — 日程页任务
+Use these commands for items shown in the Schedule page calendar. They create or edit scheduled tasks, not legacy schedule events.
+
+- create_calendar_task: Create a scheduled task on the calendar and task board.
+  Params: input (object, required)
+  input fields: title (string, required), scheduled_start_at (string, required — ISO 8601 local datetime), scheduled_end_at (string, required — ISO 8601 local datetime), project (string|null, optional), column_id (string|null, optional), reminder_minutes (number|null, optional), repeat_type (string|null, optional — one of "none", "daily", "weekly", "monthly", "yearly"), done (boolean|null, optional)
+  Example:
+  [ACTION] {{"command":"create_calendar_task","params":{{"input":{{"title":"Plan sprint","scheduled_start_at":"2026-06-21T10:00:00","scheduled_end_at":"2026-06-21T11:00:00","repeat_type":"none","reminder_minutes":10}}}}}} [/ACTION]
+
+- update_calendar_task: Update an existing scheduled task.
+  Params: id (string, required), input (object, required — same fields as create_calendar_task), scope (string|null, optional — "single" or "future"; use "single" unless the user explicitly asks future recurring items)
+  Example:
+  [ACTION] {{"command":"update_calendar_task","params":{{"id":"5b6f-...","input":{{"title":"Plan sprint","scheduled_start_at":"2026-06-21T10:30:00","scheduled_end_at":"2026-06-21T11:30:00","repeat_type":"none"}},"scope":"single"}}}} [/ACTION]
+
+- remove_task_from_schedule: Remove a task from the calendar while keeping it on the task board.
+  Params: id (string, required), scope (string|null, optional — "single" or "future")
+  Example:
+  [ACTION] {{"command":"remove_task_from_schedule","params":{{"id":"5b6f-...","scope":"single"}}}} [/ACTION]
+
+- cancel_task_recurrence: Stop a scheduled task from repeating.
+  Params: id (string, required), scope (string, required — "single" or "future")
+  Example:
+  [ACTION] {{"command":"cancel_task_recurrence","params":{{"id":"5b6f-...","scope":"future"}}}} [/ACTION]
+
+- delete_recurring_tasks: Delete a scheduled task or future recurring tasks.
+  Params: id (string, required), scope (string, required — "single" or "future")
+  Example:
+  [ACTION] {{"command":"delete_recurring_tasks","params":{{"id":"5b6f-...","scope":"single"}}}} [/ACTION]
+
 ### Tasks — 分组管理
 Tasks are organized in a kanban board: Groups contain Columns, and Columns contain Tasks.
 A "group" is identified by its `project` name (a string). The default group is named "default" and cannot be renamed or deleted.
@@ -377,6 +406,11 @@ Each group contains columns (like "重要", "一般"). Columns hold tasks and ca
   Params: id (string, required)
   Example:
   [ACTION] {{"command":"delete_schedule","params":{{"id":"c3d4-..."}}}} [/ACTION]
+
+- toggle_schedule: Toggle a legacy schedule event's done/undone status.
+  Params: id (string, required)
+  Example:
+  [ACTION] {{"command":"toggle_schedule","params":{{"id":"c3d4-..."}}}} [/ACTION]
 
 ### Alarms
 - add_alarm: Create a new alarm.
