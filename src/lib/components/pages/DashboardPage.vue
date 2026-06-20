@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useRouter } from 'vue-router'
 import { invoke } from '@tauri-apps/api/core'
@@ -16,7 +16,7 @@ import { playAlertChime } from '$lib/utils/alertSound'
 
 const router = useRouter()
 const { t } = useI18n()
-const { isMobile, isRouteEnabled } = useMobile()
+const { isMobile, isMobilePlatform, isRouteEnabled } = useMobile()
 const clipboard = useClipboardStore()
 const settings = useSettingsStore()
 const { monitoring } = storeToRefs(clipboard)
@@ -31,8 +31,15 @@ const alarms = ref<Alarm[]>([])
 const pomodoro = ref<PomodoroState | null>(null)
 const pendingTasks = computed(() => tasks.value.filter((task) => !task.done))
 const doneTasks = computed(() => tasks.value.filter((task) => task.done))
+const animatedPendingCount = ref(0)
 const soundVolumePercent = computed(() => Math.round(soundSettings.value.volume * 100))
 let interval: ReturnType<typeof setInterval>
+let countTimer: ReturnType<typeof setInterval> | null = null
+
+function vibrate(pattern: number | number[]) {
+  if (!isMobilePlatform.value || typeof navigator === 'undefined' || !navigator.vibrate) return
+  try { navigator.vibrate(pattern) } catch {}
+}
 
 const quickNav = [
   ['tasks', 'nav.tasks', CheckSquare, 'text-blue-500'], ['notes', 'nav.notes', FileText, 'text-green-500'], ['clipboard', 'nav.clipboard', Scissors, 'text-purple-500'], ['pomodoro', 'nav.pomodoro', Timer, 'text-red-500'],
@@ -101,6 +108,7 @@ async function loadData() {
 }
 
 async function toggleTask(id: string) {
+  vibrate(10)
   await invoke('toggle_task', { id })
   await loadData()
 }
@@ -108,6 +116,12 @@ async function toggleTask(id: string) {
 function startEdit(task: Task) {
   editingId.value = task.id
   editTitle.value = task.title
+  vibrate(8)
+  nextTick(() => {
+    const input = document.querySelector(`[data-dashboard-task-input="${task.id}"]`) as HTMLInputElement
+    input?.focus()
+    input?.select()
+  })
 }
 
 async function saveEdit() {
@@ -131,7 +145,6 @@ async function togglePomodoro() {
     pomodoro.value = await invoke('pomodoro_pause')
   } else {
     await invoke('pomodoro_start')
-    playAlertChime(soundSettings.value.pomodoroStart, soundSettings.value.volume)
     pomodoro.value = await invoke('pomodoro_get_state')
   }
 }
@@ -156,7 +169,28 @@ onMounted(async () => {
   interval = setInterval(loadData, 5000)
 })
 onBeforeUnmount(() => clearInterval(interval))
+onBeforeUnmount(() => {
+  if (countTimer) clearInterval(countTimer)
+})
 useAiRefresh(loadData)
+
+watch(() => pendingTasks.value.length, (next) => {
+  if (countTimer) clearInterval(countTimer)
+  const start = animatedPendingCount.value
+  const diff = next - start
+  if (diff === 0) return
+  const steps = Math.min(12, Math.max(4, Math.abs(diff) * 4))
+  let step = 0
+  countTimer = setInterval(() => {
+    step += 1
+    animatedPendingCount.value = Math.round(start + diff * (step / steps))
+    if (step >= steps && countTimer) {
+      clearInterval(countTimer)
+      countTimer = null
+      animatedPendingCount.value = next
+    }
+  }, 28)
+}, { immediate: true })
 </script>
 
 <template>
@@ -206,7 +240,7 @@ useAiRefresh(loadData)
         </div>
 
         <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-1">
-          <button class="flex items-center justify-between gap-3 rounded-xl border bg-card p-4 text-left transition-colors hover:border-primary/40" @click="clipboard.toggleMonitoring">
+          <button v-if="!isMobile" class="flex items-center justify-between gap-3 rounded-xl border bg-card p-4 text-left transition-colors hover:border-primary/40" @click="clipboard.toggleMonitoring">
             <div>
               <div class="flex items-center gap-2 text-sm font-semibold">
                 <Radio class="w-4 h-4" :class="monitoring ? 'text-success' : 'text-muted-foreground'" />
@@ -287,6 +321,7 @@ useAiRefresh(loadData)
       </button>
 
       <button
+        v-if="!isMobile"
         class="text-left bg-card rounded-xl p-4 border hover:shadow-sm transition"
         @click="router.push('/schedule')"
       >
@@ -315,13 +350,13 @@ useAiRefresh(loadData)
     </section>
 
     <!-- Alarms row -->
-    <section class="mb-6">
+    <section v-if="!isMobile" class="mb-6">
       <div class="flex justify-between items-center mb-3">
         <h2 class="text-xs font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-1.5">
           <AlarmClock class="w-3.5 h-3.5" />
           {{ t('nav.alarm') }}
         </h2>
-        <button class="text-xs text-muted-foreground hover:text-primary transition-colors" @click="router.push('/alarm')">{{ t('dashboardExt.openClipboardPage') }}</button>
+        <button class="text-xs text-muted-foreground hover:text-primary transition-colors" @click="router.push('/alarm')">{{ t('alarm.allAlarms') }}</button>
       </div>
       <div v-if="nextAlarms.length === 0" class="text-center py-4 text-muted-foreground text-xs bg-card rounded-xl border">
         {{ t('alarm.noAlarms') }}
@@ -346,17 +381,17 @@ useAiRefresh(loadData)
     </section>
 
     <!-- Counts row -->
-    <div class="grid grid-cols-3 gap-4 mb-8">
+    <div class="grid gap-4 mb-8" :class="isMobile ? 'grid-cols-2' : 'grid-cols-3'">
       <button class="text-left bg-card rounded-xl p-4 border hover:shadow-sm transition" @click="router.push('/tasks')">
         <div class="text-blue-500 text-xs font-medium mb-2">{{ t('nav.tasks') }}</div>
-        <div class="text-3xl font-bold tabular-nums">{{ pendingTasks.length }}</div>
+        <div class="text-3xl font-bold tabular-nums transition-transform duration-150" :key="animatedPendingCount">{{ animatedPendingCount }}</div>
         <div class="text-xs text-muted-foreground">{{ doneTasks.length }} {{ t('dashboard.completed') }}</div>
       </button>
       <button class="text-left bg-card rounded-xl p-4 border hover:shadow-sm transition" @click="router.push('/notes')">
         <div class="text-green-500 text-xs font-medium mb-2">{{ t('nav.notes') }}</div>
         <div class="text-3xl font-bold tabular-nums">{{ notes.length }}</div>
       </button>
-      <button class="text-left bg-card rounded-xl p-4 border hover:shadow-sm transition" @click="router.push('/schedule')">
+      <button v-if="!isMobile" class="text-left bg-card rounded-xl p-4 border hover:shadow-sm transition" @click="router.push('/schedule')">
         <div class="text-orange-500 text-xs font-medium mb-2">{{ t('dashboard.upcoming') }}</div>
         <div class="text-3xl font-bold tabular-nums">{{ schedules.filter(item => !item.done).length }}</div>
       </button>
@@ -366,10 +401,13 @@ useAiRefresh(loadData)
     <section v-if="!isMobile" class="mb-6">
       <div class="flex justify-between mb-3">
         <h2 class="text-xs font-semibold text-muted-foreground uppercase tracking-wider">{{ t('dashboardExt.clipboardStatus') }}</h2>
-        <button class="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-primary transition-colors" @click="clipboard.toggleMonitoring">
-          <Radio class="w-3 h-3" :class="monitoring ? 'text-success' : ''" />
-          {{ monitoring ? t('dashboardExt.clipboardMonitoring') : t('dashboardExt.clipboardOff') }}
-        </button>
+        <div class="flex items-center gap-3">
+          <button class="text-xs text-muted-foreground hover:text-primary transition-colors" @click="router.push('/clipboard')">{{ t('dashboardExt.openClipboardPage') }}</button>
+          <button class="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-primary transition-colors" @click="clipboard.toggleMonitoring">
+            <Radio class="w-3 h-3" :class="monitoring ? 'text-success' : ''" />
+            {{ monitoring ? t('dashboardExt.clipboardMonitoring') : t('dashboardExt.clipboardOff') }}
+          </button>
+        </div>
       </div>
       <div v-for="entry in entries" :key="entry.id" class="group flex items-center gap-3 px-3 py-2 rounded-xl bg-card border mb-1.5 cursor-pointer hover:border-primary/40 transition-colors" @click="writeText(entry.content)">
         <ImageIcon v-if="entry.content_type.startsWith('image')" class="w-4 h-4 text-purple-400" />
@@ -383,26 +421,28 @@ useAiRefresh(loadData)
     <!-- Tasks -->
     <section class="mb-6">
       <h2 class="text-xs font-semibold text-muted-foreground mb-3 uppercase tracking-wider">{{ t('dashboard.recentTasks') }}</h2>
-      <div v-for="task in tasks.slice(0, 5)" :key="task.id" class="flex items-center gap-3 px-3 py-2 rounded-xl bg-card border mb-1.5">
-        <button @click="toggleTask(task.id)">
-          <CheckSquare v-if="task.done" class="w-4 h-4 text-success" />
-          <Circle v-else class="w-4 h-4 text-muted-foreground/40" />
-        </button>
-        <input
-          v-if="editingId === task.id"
-          v-model="editTitle"
-          class="text-sm flex-1 bg-transparent border-b border-primary outline-none px-1"
-          @keydown="onEditKeydown"
-          @blur="saveEdit"
-          autofocus
-        />
-        <span
-          v-else
-          class="text-sm flex-1 cursor-text"
-          :class="{ 'line-through text-muted-foreground': task.done }"
-          @click="startEdit(task)"
-        >{{ task.title }}</span>
-      </div>
+      <TransitionGroup name="task-row" tag="div">
+        <div v-for="task in tasks.slice(0, 5)" :key="task.id" class="flex items-center gap-3 px-3 py-2 rounded-xl bg-card border mb-1.5 transition-all duration-200">
+          <button class="grid h-8 w-8 place-items-center rounded-lg transition-colors active:bg-secondary" @click="toggleTask(task.id)">
+            <CheckSquare v-if="task.done" class="w-4 h-4 text-success transition-all duration-200 scale-110" />
+            <Circle v-else class="w-4 h-4 text-muted-foreground/40 transition-all duration-200" />
+          </button>
+          <input
+            v-if="editingId === task.id"
+            v-model="editTitle"
+            :data-dashboard-task-input="task.id"
+            class="text-sm flex-1 bg-transparent border-b border-primary outline-none px-1"
+            @keydown="onEditKeydown"
+            @blur="saveEdit"
+          />
+          <span
+            v-else
+            class="text-sm flex-1 cursor-text transition-colors"
+            :class="{ 'line-through text-muted-foreground': task.done }"
+            @click="startEdit(task)"
+          >{{ task.title }}</span>
+        </div>
+      </TransitionGroup>
     </section>
 
     <!-- Notes -->
@@ -418,3 +458,17 @@ useAiRefresh(loadData)
     <AiChatWidget />
   </div>
 </template>
+
+<style scoped>
+.task-row-enter-active,
+.task-row-leave-active,
+.task-row-move {
+  transition: opacity 180ms ease, transform 180ms ease;
+}
+
+.task-row-enter-from,
+.task-row-leave-to {
+  opacity: 0;
+  transform: translateY(6px) scale(0.98);
+}
+</style>

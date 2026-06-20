@@ -1,10 +1,13 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { storeToRefs } from 'pinia'
+import { useRouter } from 'vue-router'
 import { invoke } from '@tauri-apps/api/core'
 import { enable, disable, isEnabled } from '@tauri-apps/plugin-autostart'
 import { open } from '@tauri-apps/plugin-dialog'
-import { Save, Globe, Power, Sun, Moon, Monitor, Scissors, Volume2, FolderOpen, Play } from 'lucide-vue-next'
+import { mkdir, readFile, writeFile } from '@tauri-apps/plugin-fs'
+import { appDataDir, basename, extname, join } from '@tauri-apps/api/path'
+import { Save, Globe, Power, Sun, Moon, Monitor, Scissors, Volume2, FolderOpen, Play, Bot, ChevronRight } from 'lucide-vue-next'
 import { getVersion } from '@tauri-apps/api/app'
 import { useSettingsStore } from '$lib/stores/settingsStore'
 import { useClipboardStore } from '$lib/stores/clipboardStore'
@@ -13,12 +16,15 @@ import { useI18n, type Locale } from '$lib/i18n'
 import { Input } from '$lib/components/ui/input'
 import type { ThemeMode } from '$lib/utils/theme'
 import { PRESET_ALERT_SOUNDS, playAlertChime } from '$lib/utils/alertSound'
+import { useMobile } from '$lib/composables/useMobile'
 
 const settings = useSettingsStore()
+const router = useRouter()
 const clipboardStore = useClipboardStore()
 const syncStore = useSyncStore()
 const { locale, theme, aiConfig, clipboardRetention, soundSettings } = storeToRefs(settings)
 const { t } = useI18n()
+const { isDesktopPlatform, isMobilePlatform } = useMobile()
 const autostartEnabled = ref(false)
 const aiTestResult = ref('')
 const aiTesting = ref(false)
@@ -31,6 +37,27 @@ type SoundTarget = 'pomodoroStart' | 'pomodoroEnd' | 'alarm'
 interface CopiedSound {
   path: string
   name: string
+}
+
+function safeSoundFilename(value: string) {
+  const fallback = `sound-${Date.now()}`
+  const decoded = decodeURIComponent(value.split(/[/?#]/).filter(Boolean).pop() || fallback)
+  const cleaned = decoded.replace(/[^\w.\-\u4e00-\u9fa5]+/g, '-').replace(/^-+|-+$/g, '')
+  return cleaned || fallback
+}
+
+async function copySelectedSoundToAppData(selected: string): Promise<CopiedSound> {
+  const data = await readFile(selected)
+  const appDir = await appDataDir()
+  const soundsDir = await join(appDir, 'sounds')
+  await mkdir(soundsDir, { recursive: true })
+  const rawName = safeSoundFilename(selected)
+  const ext = await extname(rawName)
+  const base = ext ? rawName.slice(0, -(ext.length + 1)) : rawName
+  const filename = `${base || 'sound'}-${Date.now()}${ext ? `.${ext}` : ''}`
+  const target = await join(soundsDir, filename)
+  await writeFile(target, data)
+  return { path: target, name: await basename(target) }
 }
 
 function startRecording() {
@@ -99,7 +126,9 @@ function customSoundName(target: SoundTarget) {
   return choice.type === 'custom' ? choice.name : ''
 }
 
-const soundTargets: SoundTarget[] = ['pomodoroStart', 'pomodoroEnd', 'alarm']
+const soundTargets = computed<SoundTarget[]>(() =>
+  isMobilePlatform.value ? ['pomodoroStart', 'pomodoroEnd'] : ['pomodoroStart', 'pomodoroEnd', 'alarm'],
+)
 
 const soundVolumePercent = computed(() => Math.round(soundSettings.value.volume * 100))
 
@@ -125,9 +154,18 @@ async function chooseCustomSound(target: SoundTarget) {
     filters: [{ name: 'Audio', extensions: ['mp3', 'wav', 'ogg', 'm4a', 'aac', 'flac'] }]
   })
   if (typeof selected !== 'string') return
-  const copied = await invoke<CopiedSound>('copy_custom_sound', { path: selected })
-  soundSettings.value[target] = { type: 'custom', path: copied.path, name: copied.name }
+  try {
+    const copied = selected.startsWith('content://')
+      ? await copySelectedSoundToAppData(selected)
+      : await invoke<CopiedSound>('copy_custom_sound', { path: selected })
+    soundSettings.value[target] = { type: 'custom', path: copied.path, name: copied.name }
+  } catch (error) {
+    console.error('Failed to copy custom sound:', error)
+    const name = safeSoundFilename(selected)
+    soundSettings.value[target] = { type: 'custom', path: selected, name }
+  }
   settings.saveSoundSettings()
+  previewSound(target)
 }
 
 function previewSound(target: SoundTarget) {
@@ -206,7 +244,7 @@ const syncErrorText = computed(() =>
 
 async function syncPair() {
   try {
-    await syncStore.pair(syncServerUrl.value, syncPairingCode.value, syncDeviceName.value || 'Desktop')
+    await syncStore.pair(syncServerUrl.value, syncPairingCode.value, syncDeviceName.value || (isDesktopPlatform.value ? 'Desktop' : 'Mobile'))
   } catch {
     // error handled by store
   }
@@ -215,16 +253,28 @@ async function syncPair() {
 const appVersion = ref('0.0.0')
 
 onMounted(async () => {
-  try { autostartEnabled.value = await isEnabled() } catch {}
+  if (isDesktopPlatform.value) {
+    try { autostartEnabled.value = await isEnabled() } catch {}
+  }
   try { appVersion.value = await getVersion() } catch {}
   syncStore.loadConfig()
-  runCleanup()
+  if (isDesktopPlatform.value) runCleanup()
 })
 </script>
 
 <template>
-  <div class="max-w-2xl mx-auto px-6 py-8">
+  <div class="mx-auto max-w-2xl px-4 py-6 sm:px-6 sm:py-8">
     <h1 class="text-2xl font-bold mb-6">{{ t('settings.title') }}</h1>
+    <section v-if="isMobilePlatform" class="bg-card rounded-xl p-4 border mb-6">
+      <h2 class="text-sm font-semibold mb-3">{{ t('settings.mobileEntries') }}</h2>
+      <button class="flex w-full items-center justify-between gap-3 rounded-lg bg-secondary/70 px-3 py-3 text-left transition-colors hover:bg-secondary" @click="router.push('/ai')">
+        <span class="flex min-w-0 items-center gap-2">
+          <Bot class="w-4 h-4 text-violet-500" />
+          <span class="text-sm font-medium">{{ t('nav.ai') }}</span>
+        </span>
+        <ChevronRight class="w-4 h-4 text-muted-foreground" />
+      </button>
+    </section>
     <section class="bg-card rounded-xl p-4 border mb-6">
       <h2 class="text-sm font-semibold mb-1 flex items-center gap-2">
         <Globe class="w-4 h-4" />
@@ -266,7 +316,7 @@ onMounted(async () => {
         <Volume2 class="w-4 h-4" />
         {{ t('sound.title') }}
       </h2>
-      <p class="text-xs text-muted-foreground mb-3">{{ t('sound.desc') }}</p>
+      <p class="text-xs text-muted-foreground mb-3">{{ isMobilePlatform ? t('sound.mobileDesc') : t('sound.desc') }}</p>
       <div class="space-y-3">
         <div class="rounded-lg bg-secondary/50 p-3">
           <div class="mb-2 flex items-center justify-between gap-3">
@@ -285,29 +335,31 @@ onMounted(async () => {
           />
           <p class="mt-2 text-xs text-muted-foreground">{{ t('sound.volumeDesc') }}</p>
         </div>
-        <div v-for="target in soundTargets" :key="target" class="flex flex-wrap items-center gap-2">
-          <span class="w-28 text-xs text-muted-foreground">{{ t(`sound.${target}`) }}</span>
+        <div v-for="target in soundTargets" :key="target" class="grid gap-2 sm:grid-cols-[7rem_minmax(0,1fr)] sm:items-center">
+          <span class="text-xs text-muted-foreground sm:w-28">{{ t(`sound.${target}`) }}</span>
+          <div class="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:items-center">
           <select
-            class="min-w-40 px-3 py-2 rounded-lg border bg-transparent text-sm"
+            class="mobile-field col-span-2 min-w-0 rounded-lg border bg-background px-3 text-sm sm:col-span-1 sm:min-w-40"
             :value="soundValue(target)"
             @change="onSoundSelect(target, $event)"
           >
             <option v-if="customSoundName(target)" value="custom" disabled>{{ customSoundName(target) }}</option>
             <option v-for="sound in PRESET_ALERT_SOUNDS" :key="sound.id" :value="sound.id">{{ t(sound.labelKey) }}</option>
           </select>
-          <button class="px-3 py-2 rounded-lg bg-secondary text-sm flex items-center gap-1.5 transition-colors hover:bg-secondary/70" @click="chooseCustomSound(target)">
+          <button class="mobile-field inline-flex items-center justify-center gap-1.5 rounded-lg bg-secondary px-3 text-sm transition-colors hover:bg-secondary/70" @click="chooseCustomSound(target)">
             <FolderOpen class="w-3.5 h-3.5" />
             {{ t('sound.chooseCustom') }}
           </button>
-          <button class="px-3 py-2 rounded-lg bg-secondary text-sm flex items-center gap-1.5 transition-colors hover:bg-secondary/70" @click="previewSound(target)">
+          <button class="mobile-field inline-flex items-center justify-center gap-1.5 rounded-lg bg-secondary px-3 text-sm transition-colors hover:bg-secondary/70" @click="previewSound(target)">
             <Play class="w-3.5 h-3.5" />
             {{ t('sound.preview') }}
           </button>
-          <span v-if="customSoundName(target)" class="text-xs text-muted-foreground truncate max-w-48">{{ customSoundName(target) }}</span>
+          <span v-if="customSoundName(target)" class="col-span-2 truncate text-xs text-muted-foreground sm:max-w-48">{{ customSoundName(target) }}</span>
+          </div>
         </div>
       </div>
     </section>
-    <section class="bg-card rounded-xl p-4 border mb-6">
+    <section v-if="isDesktopPlatform" class="bg-card rounded-xl p-4 border mb-6">
       <div class="flex items-center justify-between">
         <div>
           <h2 class="text-sm font-semibold flex items-center gap-2">
@@ -315,17 +367,17 @@ onMounted(async () => {
             {{ t('settings.autostart') }}
           </h2>
           <p class="text-xs text-muted-foreground mt-1">{{ t('settings.autostartDesc') }}</p></div>
-        <button class="relative w-11 h-6 rounded-full" :class="autostartEnabled ? 'bg-primary' : 'bg-input'" @click="toggleAutostart">
+        <button class="mobile-switch" :class="autostartEnabled ? 'bg-primary' : 'bg-input'" @click="toggleAutostart">
           <span class="absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform" :class="{ 'translate-x-5': autostartEnabled }" /></button>
       </div>
     </section>
-    <section class="bg-card rounded-xl p-4 border mb-6">
+    <section v-if="isDesktopPlatform" class="bg-card rounded-xl p-4 border mb-6">
       <div class="flex items-center justify-between mb-1">
         <h2 class="text-sm font-semibold flex items-center gap-2">
           <Scissors class="w-4 h-4" />
           {{ t('clipboardSettings.title') }}
         </h2>
-        <button class="relative w-11 h-6 rounded-full" :class="clipboardStore.monitoring ? 'bg-primary' : 'bg-input'" @click="clipboardStore.toggleMonitoring()">
+        <button class="mobile-switch" :class="clipboardStore.monitoring ? 'bg-primary' : 'bg-input'" @click="clipboardStore.toggleMonitoring()">
           <span class="absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform" :class="{ 'translate-x-5': clipboardStore.monitoring }" /></button>
       </div>
       <p class="text-xs text-muted-foreground mb-3">{{ t('clipboardSettings.desc') }}</p>
@@ -382,7 +434,7 @@ onMounted(async () => {
       <div class="space-y-3">
         <label class="block"><span class="block text-xs text-muted-foreground mb-1">{{ t('settings.provider') }}</span><select
           v-model="aiConfig.provider"
-          class="w-full px-3 py-2 rounded-lg border bg-transparent text-sm"
+          class="mobile-field w-full rounded-lg border bg-background px-3 text-base"
           @change="settings.saveAiConfig"
         >
           <option value="deepseek">DeepSeek</option>
@@ -391,19 +443,19 @@ onMounted(async () => {
         </select></label>
         <label class="block"><span class="block text-xs text-muted-foreground mb-1">{{ t('settings.apiUrl') }}</span><Input
           v-model="aiConfig.api_url"
-          class="w-full"
+          class="mobile-field w-full"
           @blur="settings.saveAiConfig"
         /></label>
         <label class="block"><span class="block text-xs text-muted-foreground mb-1">{{ t('settings.apiKey') }}</span><Input
           v-model="aiConfig.api_key"
           type="password"
-          class="w-full"
+          class="mobile-field w-full"
           placeholder="sk-..."
           @blur="settings.saveAiConfig"
         /></label>
         <label class="block"><span class="block text-xs text-muted-foreground mb-1">{{ t('settings.model') }}</span><Input
           v-model="aiConfig.model"
-          class="w-full"
+          class="mobile-field w-full"
           @blur="settings.saveAiConfig"
         /></label>
         <div class="flex items-center justify-between py-2">
@@ -412,7 +464,7 @@ onMounted(async () => {
             <span class="block text-[11px] text-muted-foreground mt-0.5">{{ t('settings.reasoningEnabledDesc') }}</span>
           </div>
           <button
-            class="relative w-11 h-6 rounded-full transition-colors"
+            class="mobile-switch transition-colors"
             :class="aiConfig.reasoning_enabled ? 'bg-primary' : 'bg-input'"
             @click="aiConfig.reasoning_enabled = !aiConfig.reasoning_enabled; settings.saveAiConfig()"
           ><span class="absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform" :class="{ 'translate-x-5': aiConfig.reasoning_enabled }" /></button>
@@ -423,7 +475,7 @@ onMounted(async () => {
             <button
               v-for="level in ['low', 'medium', 'high']"
               :key="level"
-              class="px-3 py-1.5 rounded-lg text-sm font-medium transition-colors"
+            class="mobile-field px-3 rounded-lg text-sm font-medium transition-colors"
               :class="aiConfig.reasoning_effort === level ? 'bg-primary text-primary-foreground' : 'bg-secondary text-muted-foreground hover:bg-secondary/70'"
               @click="aiConfig.reasoning_effort = level; settings.saveAiConfig()"
             >{{ t('settings.effort.' + level) }}</button>
@@ -446,7 +498,7 @@ onMounted(async () => {
           </div>
         </label>
         <div class="flex items-center gap-3">
-          <button class="px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm flex items-center gap-1.5 transition-colors hover:bg-primary/90" :disabled="aiTesting || !aiConfig.api_key" @click="testAi">
+          <button class="mobile-field inline-flex items-center justify-center gap-1.5 rounded-lg bg-primary px-4 text-sm text-primary-foreground transition-colors hover:bg-primary/90" :disabled="aiTesting || !aiConfig.api_key" @click="testAi">
             <Save class="w-3.5 h-3.5" />
             {{ aiTesting ? t('settings.testing') : t('settings.testConnection') }}
           </button>
@@ -467,13 +519,13 @@ onMounted(async () => {
         </div>
         <div class="flex items-center gap-2">
           <button
-            class="px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm transition-colors hover:bg-primary/90"
+            class="mobile-field rounded-lg bg-primary px-4 text-sm text-primary-foreground transition-colors hover:bg-primary/90"
             :disabled="syncStore.isSyncing"
             @click="syncStore.syncNow()"
           >
             {{ syncStore.isSyncing ? t('settings.syncing') : t('settings.syncNow') }}
           </button>
-          <button class="px-4 py-2 rounded-lg bg-destructive/10 text-destructive text-sm" @click="syncStore.disconnect()">
+          <button class="mobile-field rounded-lg bg-destructive/10 px-4 text-sm text-destructive" @click="syncStore.disconnect()">
             {{ t('settings.syncDisconnect') }}
           </button>
         </div>
@@ -492,18 +544,18 @@ onMounted(async () => {
         <p class="text-sm text-muted-foreground">{{ t('settings.syncDesc') }}</p>
         <label class="block">
           <span class="text-xs text-muted-foreground">{{ t('settings.syncServerUrl') }}</span>
-          <input v-model="syncServerUrl" type="text" :placeholder="t('settings.syncServerUrlPlaceholder')" class="w-full mt-1 px-3 py-2 rounded-lg border bg-background text-sm" />
+          <input v-model="syncServerUrl" type="text" :placeholder="t('settings.syncServerUrlPlaceholder')" class="mobile-field mt-1 w-full border bg-background px-3 text-sm" />
         </label>
         <label class="block">
           <span class="text-xs text-muted-foreground">{{ t('settings.syncPairingCode') }}</span>
-          <input v-model="syncPairingCode" type="text" placeholder="000000" maxlength="6" class="w-full mt-1 px-3 py-2 rounded-lg border bg-background text-sm font-mono tracking-widest" />
+          <input v-model="syncPairingCode" type="text" placeholder="000000" maxlength="6" class="mobile-field mt-1 w-full border bg-background px-3 text-sm font-mono tracking-widest" />
         </label>
         <label class="block">
           <span class="text-xs text-muted-foreground">{{ t('settings.syncDeviceName') }}</span>
-          <input v-model="syncDeviceName" type="text" :placeholder="t('settings.syncDeviceNamePlaceholder')" class="w-full mt-1 px-3 py-2 rounded-lg border bg-background text-sm" />
+          <input v-model="syncDeviceName" type="text" :placeholder="t('settings.syncDeviceNamePlaceholder')" class="mobile-field mt-1 w-full border bg-background px-3 text-sm" />
         </label>
         <button
-          class="px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm transition-colors hover:bg-primary/90"
+          class="mobile-field rounded-lg bg-primary px-4 text-sm text-primary-foreground transition-colors hover:bg-primary/90"
           :disabled="!syncServerUrl || !syncPairingCode"
           @click="syncPair()"
         >

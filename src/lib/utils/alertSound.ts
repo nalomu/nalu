@@ -12,6 +12,7 @@ import type { SoundChoice } from "$lib/stores/settingsStore";
 
 export const ALERT_AUDIO_STOP_EVENT = "alert-audio-stop";
 
+const audioWindowId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 let audioCtx: AudioContext | null = null;
 let loopTimer: ReturnType<typeof setTimeout> | null = null;
 let unlocked = false;
@@ -19,6 +20,8 @@ const activeAudio = new Set<HTMLAudioElement>();
 let oneShotAudio: HTMLAudioElement | null = null;
 let loopAudio: HTMLAudioElement | null = null;
 let stopListenerInitialized = false;
+const oneShotOscillators = new Set<OscillatorNode>();
+let oneShotGeneration = 0;
 
 // Generation counter — incremented on every stop().
 // Any loop whose generation doesn't match is an orphan and must self-terminate.
@@ -65,7 +68,10 @@ export const PRESET_ALERT_SOUNDS = [
 
 function resolveSoundUrl(choice?: SoundChoice): string | null {
   if (!choice || choice.type === "synth") return null;
-  if (choice.type === "custom") return convertFileSrc(choice.path);
+  if (choice.type === "custom") {
+    if (choice.path.startsWith("content://") || choice.path.startsWith("file://")) return choice.path;
+    return convertFileSrc(choice.path);
+  }
   const preset = PRESET_ALERT_SOUNDS.find((item) => item.id === choice.id);
   return preset?.url || null;
 }
@@ -83,8 +89,23 @@ function playAudioUrl(url: string, volume = 1): Promise<void> {
   });
 }
 
-function playChime(volume = 1) {
+function stopOneShotAlert() {
+  oneShotGeneration++;
+  if (oneShotAudio) {
+    try { oneShotAudio.pause(); oneShotAudio.currentTime = 0; } catch { /* ignore */ }
+    activeAudio.delete(oneShotAudio);
+    oneShotAudio = null;
+  }
+  for (const oscillator of oneShotOscillators) {
+    try { oscillator.stop(); } catch { /* already stopped */ }
+    try { oscillator.disconnect(); } catch { /* ignore */ }
+  }
+  oneShotOscillators.clear();
+}
+
+function playChime(volume = 1, trackOneShot = false, expectedOneShotGeneration = oneShotGeneration) {
   try {
+    if (trackOneShot && expectedOneShotGeneration !== oneShotGeneration) return;
     const ctx = getCtx();
     if (ctx.state === "closed") return;
     const normalizedVolume = clampVolume(volume);
@@ -114,6 +135,16 @@ function playChime(volume = 1) {
       gain.connect(ctx.destination);
       gain2.connect(ctx.destination);
 
+      if (trackOneShot) {
+        oneShotOscillators.add(osc);
+        oneShotOscillators.add(osc2);
+        const cleanup = () => {
+          oneShotOscillators.delete(osc);
+          oneShotOscillators.delete(osc2);
+        };
+        osc.addEventListener("ended", cleanup, { once: true });
+      }
+
       osc.start(now + note.time);
       osc.stop(now + note.time + note.duration);
       osc2.start(now + note.time);
@@ -126,11 +157,8 @@ function playChime(volume = 1) {
 
 /** Play the chime melody once (~4 seconds). Stops any previous one-shot before starting. */
 export function playAlertChime(choice?: SoundChoice, volume = 1) {
-  // Stop previous one-shot playback before starting a new one
-  if (oneShotAudio) {
-    try { oneShotAudio.pause(); oneShotAudio.currentTime = 0; } catch { /* ignore */ }
-    oneShotAudio = null;
-  }
+  stopOneShotAlert();
+  const myOneShotGeneration = oneShotGeneration;
 
   const url = resolveSoundUrl(choice);
   if (url) {
@@ -141,13 +169,16 @@ export function playAlertChime(choice?: SoundChoice, volume = 1) {
     audio.addEventListener("ended", () => { if (oneShotAudio === audio) oneShotAudio = null; }, { once: true });
     audio.addEventListener("error", () => { if (oneShotAudio === audio) oneShotAudio = null; }, { once: true });
     void audio.play().catch((error) => {
+      if (myOneShotGeneration !== oneShotGeneration) return;
+      try { audio.pause(); audio.currentTime = 0; } catch { /* ignore */ }
+      activeAudio.delete(audio);
       console.error("[alertSound] audio asset playback failed, falling back to synth:", error);
       if (oneShotAudio === audio) oneShotAudio = null;
-      playChime(volume);
+      playChime(volume, true, myOneShotGeneration);
     });
     return;
   }
-  playChime(volume);
+  playChime(volume, true, myOneShotGeneration);
 }
 
 /**
@@ -197,6 +228,7 @@ export function startLoopingAlert(choice?: SoundChoice, volume = 1) {
  */
 export function stopLoopingAlert() {
   generation++; // kills all running loops on next tick check
+  stopOneShotAlert();
   if (loopTimer) {
     clearTimeout(loopTimer);
     loopTimer = null;
@@ -209,13 +241,6 @@ export function stopLoopingAlert() {
   }
   activeAudio.clear();
   loopAudio = null;
-  if (oneShotAudio) {
-    try {
-      oneShotAudio.pause();
-      oneShotAudio.currentTime = 0;
-    } catch { /* ignore */ }
-    oneShotAudio = null;
-  }
   if (audioCtx && audioCtx.state !== "closed") {
     try { audioCtx.close(); } catch { /* ignore */ }
   }
@@ -226,7 +251,8 @@ export async function initAlertAudioStopListener() {
   if (stopListenerInitialized) return;
   stopListenerInitialized = true;
   try {
-    await listen(ALERT_AUDIO_STOP_EVENT, () => {
+    await listen<{ reason?: string; source?: string }>(ALERT_AUDIO_STOP_EVENT, (event) => {
+      if (event.payload?.source === audioWindowId) return;
       stopLoopingAlert();
     });
   } catch (error) {
@@ -237,7 +263,7 @@ export async function initAlertAudioStopListener() {
 
 export function stopAllAlertAudio(reason = "dismiss") {
   stopLoopingAlert();
-  void emit(ALERT_AUDIO_STOP_EVENT, { reason }).catch((error) => {
+  void emit(ALERT_AUDIO_STOP_EVENT, { reason, source: audioWindowId }).catch((error) => {
     console.warn("[alertSound] alert audio stop broadcast failed:", error);
   });
 }

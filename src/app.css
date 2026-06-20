@@ -89,6 +89,9 @@
   --radius-md: calc(var(--radius) - 0.25rem);
   --radius-sm: calc(var(--radius) - 0.4rem);
   --radius-xl: calc(var(--radius) + 0.35rem);
+  --mobile-status-height: env(safe-area-inset-top, 0px);
+  --mobile-safe-bottom: env(safe-area-inset-bottom, 0px);
+  --mobile-tabbar-height: 64px;
 }
 
 @layer base {
@@ -209,16 +212,55 @@
   transform: translateY(8px) scale(0.98);
 }
 
-/* Mobile responsive base styles */
+/* Mobile platform layout. Platform state is set by AppLayout/useMobile, not viewport width. */
+.mobile-shell {
+  --mobile-status-height: env(safe-area-inset-top, 0px);
+  --mobile-safe-bottom: env(safe-area-inset-bottom, 0px);
+  --mobile-tabbar-height: 64px;
+}
+
+.mobile-main {
+  padding-top: var(--mobile-status-height);
+  padding-bottom: calc(var(--mobile-tabbar-height) + var(--mobile-safe-bottom));
+}
+
+.mobile-safe-bottom {
+  padding-bottom: var(--mobile-safe-bottom);
+}
+
+.mobile-shell .desktop-only {
+  display: none !important;
+}
+
+.mobile-icon-button {
+  display: inline-flex;
+  height: 44px;
+  width: 44px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+}
+
+.mobile-field {
+  min-height: 48px;
+  border-radius: 12px;
+}
+
+.mobile-switch {
+  position: relative;
+  height: 24px;
+  min-height: 24px;
+  width: 44px;
+  min-width: 44px;
+  flex-shrink: 0;
+  border-radius: 9999px;
+}
+
 @media (max-width: 767px) {
-  button,
-  a[role="button"],
-  [role="button"],
   input,
   select,
   textarea {
     min-height: 44px;
-    min-width: 44px;
   }
 
   input,
@@ -227,21 +269,11 @@
     font-size: 16px; /* prevent iOS zoom on focus */
   }
 
-  .desktop-only {
-    display: none !important;
-  }
-
   .safe-bottom {
     padding-bottom: env(safe-area-inset-bottom, 0);
   }
 
   .safe-top {
     padding-top: env(safe-area-inset-top, 0);
-  }
-}
-
-@media (min-width: 768px) {
-  .mobile-only {
-    display: none !important;
   }
 }

@@ -11,6 +11,7 @@ export const zh = {
     alarm: "闹钟",
     ai: "AI 助手",
     settings: "设置",
+    mobileMine: "我的",
   },
 
   // Dashboard
@@ -40,6 +41,7 @@ export const zh = {
     groupName: "分组名称",
     copyGroup: "复制分组",
     deleteGroup: "删除分组",
+    renameGroup: "重命名分组",
     copyGroupSuccess: "分组已复制",
     deleteGroupSuccess: "分组已删除",
     groupHasIncompleteTasks: "该分组还有未完成任务，无法删除",
@@ -48,6 +50,7 @@ export const zh = {
     defaultGroupCannotRename: "默认分组不能重命名",
     searchNoResults: "没有找到匹配的任务",
     searchDragDisabled: "搜索结果中暂不支持拖动排序",
+    editTask: "编辑任务",
     deleteTaskUndo: "任务已删除",
     completeTask: "完成任务",
     reopenTask: "取消完成",
@@ -56,9 +59,16 @@ export const zh = {
     nonEmptyColumn: "该列中还有任务，请先将任务移动到其他列",
     lastColumn: "每个分组至少需要保留一列",
     newColumn: "新分列",
+    addColumn: "新增列",
+    columnName: "列名称",
     dropToCreate: "拖动任务到此处创建新列",
     renameColumn: "重命名",
     deleteColumn: "删除",
+    moveColumnLeft: "前移",
+    moveColumnRight: "后移",
+    column: "状态",
+    taskUnit: "任务",
+    columnUnit: "状态",
   },
 
   // Notes
@@ -138,6 +148,7 @@ export const zh = {
   // Settings
   settings: {
     title: "设置",
+    mobileEntries: "手机入口",
     language: "语言",
     languageDesc: "选择应用显示语言",
     theme: "主题",
@@ -190,6 +201,7 @@ export const zh = {
   sound: {
     title: "铃声",
     desc: "为番茄钟和闹钟选择提示音；本地音频会复制到应用数据目录",
+    mobileDesc: "为番茄钟选择提示音；本地音频会复制到应用数据目录",
     volume: "提示音量",
     volumeDesc: "番茄钟和闹钟共用这个音量。",
     pomodoro: "番茄钟",

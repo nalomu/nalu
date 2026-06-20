@@ -949,6 +949,42 @@ pub fn create_column_by_drag(
     Ok((col, task))
 }
 
+/// Create an empty column in a group.
+#[tauri::command]
+pub fn create_column(project: String, name: Option<String>) -> Result<TaskColumn, String> {
+    let db = get_connection()?;
+    let conn = db.as_ref().unwrap();
+    let column_name = name
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "新分列".to_string());
+
+    let max_order: i64 = conn
+        .query_row(
+            "SELECT COALESCE(MAX(sort_order), -1) + 1 FROM task_columns WHERE project = ?1",
+            rusqlite::params![project],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
+
+    let col_id = uuid::Uuid::new_v4().to_string();
+    conn.execute(
+        "INSERT INTO task_columns (id, project, name, sort_order) VALUES (?1, ?2, ?3, ?4)",
+        rusqlite::params![&col_id, &project, column_name, max_order],
+    )
+    .map_err(|e| e.to_string())?;
+
+    let column = conn
+        .query_row(
+            "SELECT id, project, name, sort_order, created_at, updated_at FROM task_columns WHERE id = ?1",
+            rusqlite::params![col_id],
+            column_from_row,
+        )
+        .map_err(|e| e.to_string())?;
+    record_column_change(conn, &column, OP_INSERT)?;
+    Ok(column)
+}
+
 /// Rename a column.
 #[tauri::command]
 pub fn rename_column(id: String, name: String) -> Result<TaskColumn, String> {

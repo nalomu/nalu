@@ -1,6 +1,7 @@
 import { createRouter, createWebHashHistory } from "vue-router";
+import { invoke } from "@tauri-apps/api/core";
 import AppLayout from "$lib/components/AppLayout.vue";
-import { MOBILE_BREAKPOINT, MOBILE_ROUTES } from "$lib/composables/useMobile";
+import { MOBILE_ROUTES, type RuntimePlatform } from "$lib/composables/useMobile";
 
 const routes = [
   {
@@ -31,13 +32,33 @@ const router = createRouter({
   routes,
 });
 
-// Mobile route guard: redirect disabled features to dashboard.
-router.beforeEach((to) => {
-  if (typeof window !== "undefined" && window.innerWidth < MOBILE_BREAKPOINT) {
-    const name = to.name as string;
-    if (name && !MOBILE_ROUTES.includes(name)) {
-      return { name: "dashboard" };
+function normalizePlatform(value: unknown): RuntimePlatform | null {
+  return value === "android" || value === "ios" || value === "desktop" ? value : null;
+}
+
+async function getRuntimePlatform(): Promise<RuntimePlatform> {
+  try {
+    const platform = normalizePlatform(await invoke("runtime_platform"));
+    if (platform) return platform;
+  } catch {
+    if (typeof window !== "undefined") {
+      const mocked = normalizePlatform(window.__NALU_RUNTIME_PLATFORM__);
+      if (mocked) return mocked;
     }
+  }
+  return "desktop";
+}
+
+// Mobile route guard: redirect disabled features only on mobile runtime platforms.
+router.beforeEach(async (to) => {
+  if (to.name === "clipboard-popup") return;
+
+  const platform = await getRuntimePlatform();
+  if (platform !== "android" && platform !== "ios") return;
+
+  const name = to.name as string;
+  if (name && !MOBILE_ROUTES.includes(name)) {
+    return { name: "dashboard" };
   }
 });
 

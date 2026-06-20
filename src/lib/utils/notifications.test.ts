@@ -2,7 +2,7 @@
  * Tests for the global notifications module.
  * Mocks Tauri APIs and sound/alert modules.
  */
-import { describe, it, expect, vi } from "vitest";
+import { beforeEach, describe, it, expect, vi } from "vitest";
 
 // ── Mock Tauri event listener ─────────────────────────────
 const eventHandlers: Record<string, Function[]> = {};
@@ -18,6 +18,10 @@ vi.mock("@tauri-apps/api/event", () => ({
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(() => Promise.resolve()),
+}));
+
+vi.mock("@tauri-apps/api/window", () => ({
+  getCurrentWindow: vi.fn(() => ({ label: "main" })),
 }));
 
 vi.mock("@tauri-apps/plugin-notification", () => ({
@@ -56,6 +60,10 @@ const { playAlertChime, startLoopingAlert, stopAllAlertAudio } = await import("$
 const { showAlert, dismissAlert } = await import("$lib/stores/alertStore");
 
 describe("notifications", () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+  });
+
   it("registers event listeners on first init", async () => {
     await initGlobalNotifications();
     expect(eventHandlers["pomodoro-work-end"]).toBeDefined();
@@ -205,6 +213,14 @@ describe("notifications", () => {
     vi.mocked(dismissAlert).mockClear();
 
     eventHandlers["alert-audio-stop"]?.forEach((h) => h({ payload: { reason: "alarm-start" } }));
+
+    expect(dismissAlert).not.toHaveBeenCalled();
+  });
+
+  it("global audio stop event from pomodoro cleanup does not dismiss the pomodoro alert", () => {
+    vi.mocked(dismissAlert).mockClear();
+
+    eventHandlers["alert-audio-stop"]?.forEach((h) => h({ payload: { reason: "pomodoro-end" } }));
 
     expect(dismissAlert).not.toHaveBeenCalled();
   });

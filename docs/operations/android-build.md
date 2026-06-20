@@ -31,6 +31,14 @@ src-tauri/gen/android
 
 ## 构建 APK
 
+日常真机调试不需要 release 签名包，优先使用：
+
+```bash
+pnpm tauri android dev
+```
+
+需要安装包形态时使用 debug APK：
+
 ```bash
 pnpm tauri android build --debug --apk
 ```

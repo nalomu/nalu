@@ -12,7 +12,20 @@ pnpm dev
 
 ## Android 真机 APK
 
-完整能力测试使用 Tauri Android APK：
+日常调试优先使用 Tauri Android dev，它会把开发版安装到已连接设备，并连接本机 Vite：
+
+```bash
+adb devices
+pnpm tauri android dev
+```
+
+查看 Android 运行日志：
+
+```bash
+adb logcat | rg "nalu|tauri|chromium|AndroidRuntime"
+```
+
+需要接近安装包环境时，再构建 debug APK：
 
 ```bash
 pnpm tauri android build --debug --apk

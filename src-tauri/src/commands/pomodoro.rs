@@ -28,6 +28,12 @@ static POMODORO: std::sync::LazyLock<Mutex<PomodoroState>> = std::sync::LazyLock
 static TIMER_TASK: std::sync::LazyLock<Mutex<Option<tauri::async_runtime::JoinHandle<()>>>> =
     std::sync::LazyLock::new(|| Mutex::new(None));
 
+const POMODORO_STATE_CHANGED_EVENT: &str = "pomodoro-state-changed";
+
+fn emit_state(app: &AppHandle, state: &PomodoroState) {
+    let _ = app.emit_to("main", POMODORO_STATE_CHANGED_EVENT, state.clone());
+}
+
 #[tauri::command]
 pub fn pomodoro_get_state() -> Result<PomodoroState, String> {
     let state = POMODORO.lock().map_err(|e| e.to_string())?;
@@ -35,10 +41,10 @@ pub fn pomodoro_get_state() -> Result<PomodoroState, String> {
 }
 
 #[tauri::command]
-pub fn pomodoro_start(app: AppHandle) -> Result<(), String> {
+pub fn pomodoro_start(app: AppHandle) -> Result<PomodoroState, String> {
     let mut state = POMODORO.lock().map_err(|e| e.to_string())?;
     if state.is_running {
-        return Ok(());
+        return Ok(state.clone());
     }
     if state.remaining_seconds == 0 {
         state.remaining_seconds = if state.is_break {
@@ -48,6 +54,8 @@ pub fn pomodoro_start(app: AppHandle) -> Result<(), String> {
         };
     }
     state.is_running = true;
+    let started_state = state.clone();
+    emit_state(&app, &started_state);
     drop(state);
 
     // Cancel any existing timer task
@@ -78,12 +86,14 @@ pub fn pomodoro_start(app: AppHandle) -> Result<(), String> {
                     // Break finished, wait for user confirmation before the next work session
                     state.is_break = false;
                     state.remaining_seconds = state.work_duration;
-                    let _ = app_clone.emit_to("main", "pomodoro-break-end", ());
+                    emit_state(&app_clone, &state);
+                    let _ = app_clone.emit_to("main", "pomodoro-break-end", state.completed_count);
                 } else {
                     // Work finished, wait for user confirmation before the break
                     state.completed_count += 1;
                     state.is_break = true;
                     state.remaining_seconds = state.break_duration;
+                    emit_state(&app_clone, &state);
                     let _ = app_clone.emit_to("main", "pomodoro-work-end", state.completed_count);
                 }
                 break;
@@ -93,27 +103,31 @@ pub fn pomodoro_start(app: AppHandle) -> Result<(), String> {
 
     let mut task = TIMER_TASK.lock().map_err(|e| e.to_string())?;
     *task = Some(handle);
-    Ok(())
+    Ok(started_state)
 }
 
 #[tauri::command]
-pub fn pomodoro_pause() -> Result<PomodoroState, String> {
+pub fn pomodoro_pause(app: AppHandle) -> Result<PomodoroState, String> {
     let mut state = POMODORO.lock().map_err(|e| e.to_string())?;
     state.is_running = false;
-    Ok(state.clone())
+    let state = state.clone();
+    emit_state(&app, &state);
+    Ok(state)
 }
 
 #[tauri::command]
-pub fn pomodoro_reset() -> Result<PomodoroState, String> {
+pub fn pomodoro_reset(app: AppHandle) -> Result<PomodoroState, String> {
     let mut state = POMODORO.lock().map_err(|e| e.to_string())?;
     state.is_running = false;
     state.is_break = false;
     state.remaining_seconds = state.work_duration;
-    Ok(state.clone())
+    let state = state.clone();
+    emit_state(&app, &state);
+    Ok(state)
 }
 
 #[tauri::command]
-pub fn pomodoro_skip() -> Result<PomodoroState, String> {
+pub fn pomodoro_skip(app: AppHandle) -> Result<PomodoroState, String> {
     let mut state = POMODORO.lock().map_err(|e| e.to_string())?;
     if state.is_break {
         state.is_break = false;
@@ -123,11 +137,14 @@ pub fn pomodoro_skip() -> Result<PomodoroState, String> {
         state.is_break = true;
         state.remaining_seconds = state.break_duration;
     }
-    Ok(state.clone())
+    let state = state.clone();
+    emit_state(&app, &state);
+    Ok(state)
 }
 
 #[tauri::command]
 pub fn pomodoro_set_duration(
+    app: AppHandle,
     work_minutes: u32,
     break_minutes: u32,
 ) -> Result<PomodoroState, String> {
@@ -137,12 +154,16 @@ pub fn pomodoro_set_duration(
     if !state.is_running {
         state.remaining_seconds = state.work_duration;
     }
-    Ok(state.clone())
+    let state = state.clone();
+    emit_state(&app, &state);
+    Ok(state)
 }
 
 #[tauri::command]
-pub fn pomodoro_reset_rounds() -> Result<PomodoroState, String> {
+pub fn pomodoro_reset_rounds(app: AppHandle) -> Result<PomodoroState, String> {
     let mut state = POMODORO.lock().map_err(|e| e.to_string())?;
     state.completed_count = 0;
-    Ok(state.clone())
+    let state = state.clone();
+    emit_state(&app, &state);
+    Ok(state)
 }

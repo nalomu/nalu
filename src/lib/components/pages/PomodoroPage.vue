@@ -7,13 +7,16 @@ import type { PomodoroState } from '$lib/types'
 import { useI18n } from '$lib/i18n'
 import { Input } from '$lib/components/ui/input'
 import { useSettingsStore } from '$lib/stores/settingsStore'
-import { playAlertChime } from '$lib/utils/alertSound'
+import { useMobile } from '$lib/composables/useMobile'
+import { POMODORO_STATE_CHANGED_EVENT } from '$lib/utils/pomodoroEvents'
 
 const { t } = useI18n()
 const settings = useSettingsStore()
+const { isMobilePlatform } = useMobile()
 const timerState = ref<PomodoroState>({ is_running: false, is_break: false, remaining_seconds: 1500, work_duration: 1500, break_duration: 300, completed_count: 0 })
 const workMinutes = ref(25)
 const breakMinutes = ref(5)
+const durationPulse = ref(false)
 const presets = [
   { work: 25, break: 5 },
   { work: 50, break: 10 },
@@ -33,6 +36,25 @@ const totalMinutes = computed(() => Math.round((timerState.value.is_break ? time
 let unlisten: UnlistenFn | undefined
 let unlistenWorkEnd: UnlistenFn | undefined
 let unlistenBreakEnd: UnlistenFn | undefined
+let unlistenStateChanged: UnlistenFn | undefined
+let durationPulseTimer: ReturnType<typeof setTimeout> | null = null
+
+function vibrate(pattern: number | number[]) {
+  if (!isMobilePlatform.value || typeof navigator === 'undefined' || !navigator.vibrate) return
+  try { navigator.vibrate(pattern) } catch {}
+}
+
+function pulseDuration() {
+  durationPulse.value = false
+  if (durationPulseTimer) clearTimeout(durationPulseTimer)
+  requestAnimationFrame(() => {
+    durationPulse.value = true
+    durationPulseTimer = setTimeout(() => {
+      durationPulse.value = false
+      durationPulseTimer = null
+    }, 260)
+  })
+}
 
 async function loadState() {
   try {
@@ -44,7 +66,6 @@ async function loadState() {
 
 async function start() {
   await invoke('pomodoro_start')
-  playAlertChime(settings.soundSettings.pomodoroStart, settings.soundSettings.volume)
   await loadState()
 }
 
@@ -59,6 +80,8 @@ async function resetRounds() { timerState.value = await invoke('pomodoro_reset_r
 async function setDuration() {
   timerState.value = await invoke('pomodoro_set_duration', { workMinutes: workMinutes.value, breakMinutes: breakMinutes.value })
   saveDurations()
+  pulseDuration()
+  vibrate(8)
 }
 
 async function applyPreset(work: number, breakValue: number) {
@@ -94,11 +117,20 @@ onMounted(async () => {
   unlisten = await listen<number>('pomodoro-tick', ({ payload }) => { timerState.value.remaining_seconds = payload })
   unlistenWorkEnd = await listen<number>('pomodoro-work-end', () => { void loadState() })
   unlistenBreakEnd = await listen('pomodoro-break-end', () => { void loadState() })
+  unlistenStateChanged = await listen<PomodoroState>(POMODORO_STATE_CHANGED_EVENT, ({ payload }) => {
+    if (payload && typeof payload === 'object') {
+      timerState.value = payload
+    } else {
+      void loadState()
+    }
+  })
 })
 onBeforeUnmount(() => {
   unlisten?.()
   unlistenWorkEnd?.()
   unlistenBreakEnd?.()
+  unlistenStateChanged?.()
+  if (durationPulseTimer) clearTimeout(durationPulseTimer)
 })
 </script>
 
@@ -152,7 +184,7 @@ onBeforeUnmount(() => {
                 <div class="text-xs text-muted-foreground">{{ t('pomodoro.completedRounds') }}</div>
                 <div class="mt-1 text-2xl font-semibold">{{ timerState.completed_count }}</div>
               </div>
-              <div class="rounded-lg bg-secondary/60 p-3">
+              <div class="rounded-lg bg-secondary/60 p-3 transition-transform duration-200" :class="{ 'duration-pulse': durationPulse }">
                 <div class="text-xs text-muted-foreground">{{ t('pomodoro.cycle') }}</div>
                 <div class="mt-1 text-2xl font-semibold">{{ workMinutes }}/{{ breakMinutes }}</div>
               </div>
@@ -184,7 +216,8 @@ onBeforeUnmount(() => {
               v-for="preset in presets"
               :key="`${preset.work}-${preset.break}`"
               type="button"
-              class="rounded-md bg-secondary px-2 py-2 text-xs transition-colors hover:bg-accent hover:text-accent-foreground"
+              class="rounded-md px-2 py-2 text-xs transition-all hover:bg-accent hover:text-accent-foreground"
+              :class="workMinutes === preset.work && breakMinutes === preset.break ? 'bg-primary text-primary-foreground shadow-sm shadow-primary/20' : 'bg-secondary'"
               @click="applyPreset(preset.work, preset.break)"
             >
               {{ preset.work }}/{{ preset.break }}
@@ -210,3 +243,24 @@ onBeforeUnmount(() => {
     </section>
   </div>
 </template>
+
+<style scoped>
+.duration-pulse {
+  animation: duration-pulse 260ms ease;
+}
+
+@keyframes duration-pulse {
+  0% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 hsl(var(--primary) / 0.28);
+  }
+  45% {
+    transform: scale(1.03);
+    box-shadow: 0 0 0 6px hsl(var(--primary) / 0.12);
+  }
+  100% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 hsl(var(--primary) / 0);
+  }
+}
+</style>

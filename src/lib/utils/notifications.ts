@@ -6,8 +6,9 @@
  * Alarm trigger events are emitted by the Rust backend (alarm.rs alarm checker).
  * All timing logic runs in Rust — immune to WebView JS throttling when the window is hidden.
  */
-import { listen } from "@tauri-apps/api/event";
+import { emit, listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { sendNotification } from "@tauri-apps/plugin-notification";
 import {
   ALERT_AUDIO_STOP_EVENT,
@@ -17,8 +18,12 @@ import {
 } from "$lib/utils/alertSound";
 import { showAlert, dismissAlert } from "$lib/stores/alertStore";
 import { type SoundChoice, useSettingsStore } from "$lib/stores/settingsStore";
+import { POMODORO_STATE_CHANGED_EVENT } from "$lib/utils/pomodoroEvents";
 
 let initialized = false;
+const notificationWindowId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+const POMODORO_EVENT_CLAIM_PREFIX = "nalu-pomodoro-event-claim:";
+const POMODORO_EVENT_CLAIM_TTL_MS = 8_000;
 
 // Guard against duplicate alarm fires (e.g. queued events from hidden webview)
 let activeAlarmId: string | null = null;
@@ -44,11 +49,6 @@ function parseAlarmSound(sound?: string | null): SoundChoice | null {
     console.warn("[notifications] invalid alarm sound payload:", error);
   }
   return null;
-}
-
-function playPomodoroStartSound() {
-  const settings = useSettingsStore();
-  playAlertChime(settings.soundSettings.pomodoroStart, settings.soundSettings.volume);
 }
 
 function fireAlarm(alarm: AlarmPayload) {
@@ -85,14 +85,62 @@ function fireAlarm(alarm: AlarmPayload) {
   });
 }
 
-function resumePomodoro() {
-  invoke("pomodoro_start")
-    .then(() => {
-      playPomodoroStartSound();
-    })
-    .catch((error) => {
-      console.error("Failed to resume pomodoro", error);
-    });
+function claimPomodoroEvent(key: string) {
+  if (typeof window === "undefined") return true;
+  try {
+    const storageKey = `${POMODORO_EVENT_CLAIM_PREFIX}${key}`;
+    const now = Date.now();
+    const current = window.localStorage.getItem(storageKey);
+    if (current) {
+      const parsed = JSON.parse(current) as { ts?: number; owner?: string };
+      if (parsed.ts && now - parsed.ts < POMODORO_EVENT_CLAIM_TTL_MS) return false;
+    }
+    const claim = JSON.stringify({ ts: now, owner: notificationWindowId });
+    window.localStorage.setItem(storageKey, claim);
+    return window.localStorage.getItem(storageKey) === claim;
+  } catch {
+    return true;
+  }
+}
+
+async function resumePomodoro() {
+  stopAllAlertAudio("pomodoro-resume");
+  try {
+    await invoke("pomodoro_start");
+    await emit(POMODORO_STATE_CHANGED_EVENT);
+  } catch (error) {
+    console.error("Failed to resume pomodoro", error);
+  }
+}
+
+async function canHandleGlobalNotifications() {
+  try {
+    return getCurrentWindow().label === "main";
+  } catch {
+    return true;
+  }
+}
+
+function showPomodoroEndAlert(options: {
+  key: string;
+  notificationBody: string;
+  title: string;
+  body: string;
+  buttonText: string;
+}) {
+  if (!claimPomodoroEvent(options.key)) return;
+  const settings = useSettingsStore();
+  stopAllAlertAudio("pomodoro-end");
+  sendNotification({ title: "番茄钟", body: options.notificationBody, silent: true });
+  playAlertChime(settings.soundSettings.pomodoroEnd, settings.soundSettings.volume);
+  showAlert({
+    title: options.title,
+    body: options.body,
+    buttonText: options.buttonText,
+    onDismiss: () => {
+      void resumePomodoro();
+    },
+  });
 }
 
 /**
@@ -102,29 +150,26 @@ function resumePomodoro() {
 export async function initGlobalNotifications() {
   if (initialized) return;
   initialized = true;
+  if (!(await canHandleGlobalNotifications())) return;
 
   // ── Pomodoro: listen for timer-end events ──
-  await listen<number>("pomodoro-work-end", () => {
-    const settings = useSettingsStore();
-    sendNotification({ title: "番茄钟", body: "工作时段结束！该休息了。" });
-    playAlertChime(settings.soundSettings.pomodoroEnd, settings.soundSettings.volume);
-    showAlert({
+  await listen<number>("pomodoro-work-end", ({ payload }) => {
+    showPomodoroEndAlert({
+      key: `work:${payload}`,
+      notificationBody: "工作时段结束！该休息了。",
       title: "🍅 工作结束",
       body: "工作时段结束！该休息了。",
       buttonText: "开始休息",
-      onDismiss: resumePomodoro,
     });
   });
 
-  await listen("pomodoro-break-end", () => {
-    const settings = useSettingsStore();
-    sendNotification({ title: "番茄钟", body: "休息结束！继续工作吧。" });
-    playAlertChime(settings.soundSettings.pomodoroEnd, settings.soundSettings.volume);
-    showAlert({
+  await listen<number>("pomodoro-break-end", ({ payload }) => {
+    showPomodoroEndAlert({
+      key: `break:${payload}`,
+      notificationBody: "休息结束！继续工作吧。",
       title: "🍅 休息结束",
       body: "休息结束！继续工作吧。",
       buttonText: "开始专注",
-      onDismiss: resumePomodoro,
     });
   });
 
@@ -133,9 +178,11 @@ export async function initGlobalNotifications() {
     fireAlarm(event.payload);
   });
 
-  await listen<{ reason?: string }>(ALERT_AUDIO_STOP_EVENT, (event) => {
-    if (event.payload?.reason === "alarm-start") return;
-    activeAlarmId = null;
-    dismissAlert();
+  await listen<{ reason?: string; source?: string }>(ALERT_AUDIO_STOP_EVENT, (event) => {
+    const reason = event.payload?.reason;
+    if (reason === "alarm-dismiss" || reason === "alarm-snooze") {
+      activeAlarmId = null;
+      dismissAlert();
+    }
   });
 }

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { RouterView, useRouter } from 'vue-router'
+import { RouterView, useRoute, useRouter } from 'vue-router'
 import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import Sidebar from './Sidebar.vue'
@@ -16,8 +16,9 @@ import { useClipboardStore } from '$lib/stores/clipboardStore'
 import { useSettingsStore } from '$lib/stores/settingsStore'
 
 const router = useRouter()
+const route = useRoute()
 const { t, locale } = useI18n()
-const { isMobile } = useMobile()
+const { isMobile, isMobilePlatform, isDesktopPlatform } = useMobile()
 const commandOpen = ref(false)
 const clipboardStore = useClipboardStore()
 const settingsStore = useSettingsStore()
@@ -44,6 +45,7 @@ function handlePointerdown() {
 }
 
 function syncTrayMenu() {
+  if (!isDesktopPlatform.value) return
   const labels: Record<string, string> = {
     open: t('tray.open'),
     dashboard: t('nav.dashboard'),
@@ -63,26 +65,74 @@ function syncTrayMenu() {
 }
 
 let unlistenTrayNav: UnlistenFn | null = null
+let unlistenMobileBack: UnlistenFn | null = null
+const mobileRouteStack: string[] = []
+let restoringMobileRoute = false
+
+function pushMobileRoute(path: string) {
+  if (!isMobilePlatform.value) return
+  if (restoringMobileRoute) {
+    restoringMobileRoute = false
+    return
+  }
+  if (mobileRouteStack[mobileRouteStack.length - 1] === path) return
+  mobileRouteStack.push(path)
+  if (mobileRouteStack.length > 30) mobileRouteStack.shift()
+}
+
+function handleMobileBack() {
+  if (commandOpen.value) {
+    commandOpen.value = false
+    return
+  }
+  if (mobileRouteStack.length > 1) {
+    mobileRouteStack.pop()
+    const previous = mobileRouteStack[mobileRouteStack.length - 1] ?? '/'
+    restoringMobileRoute = true
+    void router.replace(previous)
+    return
+  }
+  if (route.path !== '/') {
+    restoringMobileRoute = true
+    void router.replace('/')
+  }
+}
+
+async function ensureMobileBackListener() {
+  if (!isMobilePlatform.value || unlistenMobileBack) return
+  pushMobileRoute(route.fullPath)
+  unlistenMobileBack = await listen('nalu-back-requested', handleMobileBack)
+}
 
 onMounted(async () => {
   window.addEventListener('keydown', handleKeydown)
   window.addEventListener('pointerdown', handlePointerdown)
   void initGlobalNotifications()
   syncTrayMenu()
-  unlistenTrayNav = await listen<string>('tray-navigate', ({ payload }) => {
-    if (typeof payload === 'string' && payload.startsWith('/')) {
-      void router.push(payload)
-    }
-  })
+  if (isDesktopPlatform.value) {
+    unlistenTrayNav = await listen<string>('tray-navigate', ({ payload }) => {
+      if (typeof payload === 'string' && payload.startsWith('/')) {
+        void router.push(payload)
+      }
+    })
+  }
+  await ensureMobileBackListener()
   // Register clipboard shortcut if monitoring is enabled
-  if (clipboardStore.monitoring) {
+  if (isDesktopPlatform.value && clipboardStore.monitoring) {
     invoke('register_clipboard_shortcut', { shortcut: settingsStore.clipboardShortcut }).catch(() => {})
   }
 })
 
 watch(locale, syncTrayMenu)
 
+watch(() => route.fullPath, pushMobileRoute, { immediate: true })
+
+watch(isMobilePlatform, () => {
+  void ensureMobileBackListener()
+}, { immediate: true })
+
 watch(() => clipboardStore.monitoring, (enabled) => {
+  if (!isDesktopPlatform.value) return
   if (enabled) {
     invoke('register_clipboard_shortcut', { shortcut: settingsStore.clipboardShortcut }).catch(() => {})
   } else {
@@ -94,6 +144,7 @@ onBeforeUnmount(() => {
   window.removeEventListener('keydown', handleKeydown)
   window.removeEventListener('pointerdown', handlePointerdown)
   unlistenTrayNav?.()
+  unlistenMobileBack?.()
 })
 </script>
 
@@ -112,8 +163,8 @@ onBeforeUnmount(() => {
   </div>
 
   <!-- Mobile layout -->
-  <div v-if="isMobile" class="h-screen flex flex-col bg-background text-foreground overflow-hidden">
-    <main class="flex-1 overflow-y-auto">
+  <div v-if="isMobile" class="mobile-shell h-screen flex flex-col bg-background text-foreground overflow-hidden">
+    <main class="mobile-main flex-1 overflow-y-auto">
       <RouterView v-slot="{ Component }">
         <component :is="Component" />
       </RouterView>

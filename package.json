@@ -18,6 +18,7 @@
     "docs:dev": "vuepress dev docs",
     "docs:build": "vuepress build docs",
     "tauri:dev": "tauri dev",
+    "tauri:dev:android": "tauri android dev",
     "tauri:build": "tauri build"
   },
   "license": "MIT",

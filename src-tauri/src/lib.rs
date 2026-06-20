@@ -6,7 +6,6 @@ mod sync;
 use std::sync::Mutex;
 #[cfg(target_os = "macos")]
 use std::time::Instant;
-#[cfg(desktop)]
 use tauri::Emitter;
 use tauri::Manager;
 #[cfg(desktop)]
@@ -35,6 +34,24 @@ static POPUP_ACTIVATION_AT: Mutex<Option<Instant>> = Mutex::new(None);
 /// Tracks whether the main window was temporarily ordered out while showing the popup.
 #[cfg(target_os = "macos")]
 static MAIN_ORDERED_OUT_FOR_POPUP: Mutex<bool> = Mutex::new(false);
+
+#[tauri::command]
+fn runtime_platform() -> &'static str {
+    #[cfg(target_os = "android")]
+    {
+        "android"
+    }
+
+    #[cfg(target_os = "ios")]
+    {
+        "ios"
+    }
+
+    #[cfg(all(desktop, not(any(target_os = "android", target_os = "ios"))))]
+    {
+        "desktop"
+    }
+}
 
 #[cfg(target_os = "macos")]
 panel!(ClipboardPanel {
@@ -858,6 +875,7 @@ pub fn run() {
             commands::tasks::restore_task,
             commands::tasks::move_task,
             commands::tasks::create_column_by_drag,
+            commands::tasks::create_column,
             commands::tasks::rename_column,
             commands::tasks::reorder_columns,
             commands::tasks::delete_column,
@@ -924,6 +942,7 @@ pub fn run() {
             commands::sync::sync_now,
             commands::sync::sync_get_config,
             commands::sync::sync_disconnect,
+            runtime_platform,
             update_tray_menu,
         ])
         // Setup
@@ -972,8 +991,17 @@ pub fn run() {
                 main.on_window_event(move |event| {
                     if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                         api.prevent_close();
+                        #[cfg(mobile)]
+                        {
+                            let _ = main_clone.emit("nalu-back-requested", ());
+                            tracing::info!("[MainWindow] mobile back intercepted");
+                            return;
+                        }
+                        #[cfg(desktop)]
+                        {
                         let _ = main_clone.hide();
                         tracing::info!("[MainWindow] close intercepted → hidden");
+                        }
                     }
                 });
             }
