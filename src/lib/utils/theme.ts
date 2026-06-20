@@ -1,3 +1,7 @@
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+
 export type ThemeMode = "light" | "dark" | "system";
 
 const STORAGE_KEY = "nalu-theme";
@@ -69,28 +73,32 @@ export function initTheme(): () => void {
     media.addListener?.(handler);
   }
 
-  void import("@tauri-apps/api/window")
-    .then(async ({ getCurrentWindow }) => {
-      const window = getCurrentWindow();
-      applySystemTheme(await window.theme());
-      cleanupTauriTheme = await window.onThemeChanged(({ payload }) => {
-        applySystemTheme(payload);
-      });
-    })
-    .catch((error) => {
-      console.warn("[theme] Tauri window theme unavailable", error);
-    });
+  try {
+    const win = getCurrentWindow();
+    void win
+      .theme()
+      .then((t) => applySystemTheme(t))
+      .catch((error) => console.warn("[theme] Tauri window theme unavailable", error));
+    void win
+      .onThemeChanged(({ payload }) => applySystemTheme(payload))
+      .then((unlisten) => {
+        cleanupTauriTheme = unlisten;
+      })
+      .catch((error) => console.warn("[theme] Tauri window theme unavailable", error));
+  } catch (error) {
+    console.warn("[theme] Tauri window theme unavailable", error);
+  }
 
-  void Promise.all([import("@tauri-apps/api/core"), import("@tauri-apps/api/event")])
-    .then(async ([{ invoke }, { listen }]) => {
+  void (async () => {
+    try {
       applySystemTheme(await invoke<ResolvedTheme>("get_system_theme"));
       cleanupNaluTheme = await listen<ResolvedTheme>(SYSTEM_THEME_CHANGED_EVENT, ({ payload }) => {
         applySystemTheme(payload);
       });
-    })
-    .catch((error) => {
+    } catch (error) {
       console.warn("[theme] Tauri system theme command unavailable", error);
-    });
+    }
+  })();
 
   return () => {
     cleanupMedia();
