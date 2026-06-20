@@ -1018,28 +1018,26 @@ pub fn run() {
             // --- Main window: close → hide (don't quit) ---
             if let Some(main) = app.get_webview_window("main") {
                 let main_clone = main.clone();
-                main.on_window_event(move |event| {
-                    match event {
-                        tauri::WindowEvent::CloseRequested { api, .. } => {
-                            api.prevent_close();
-                            #[cfg(mobile)]
-                            {
-                                let _ = main_clone.emit("nalu-back-requested", ());
-                                tracing::info!("[MainWindow] mobile back intercepted");
-                                return;
-                            }
-                            #[cfg(desktop)]
-                            {
-                                let _ = main_clone.hide();
-                                tracing::info!("[MainWindow] close intercepted → hidden");
-                            }
+                main.on_window_event(move |event| match event {
+                    tauri::WindowEvent::CloseRequested { api, .. } => {
+                        api.prevent_close();
+                        #[cfg(mobile)]
+                        {
+                            let _ = main_clone.emit("nalu-back-requested", ());
+                            tracing::info!("[MainWindow] mobile back intercepted");
+                            return;
                         }
-                        tauri::WindowEvent::ThemeChanged(theme) => {
-                            let theme = theme_to_string(*theme).to_string();
-                            let _ = main_clone.emit("nalu://system-theme-changed", theme);
+                        #[cfg(desktop)]
+                        {
+                            let _ = main_clone.hide();
+                            tracing::info!("[MainWindow] close intercepted → hidden");
                         }
-                        _ => {}
                     }
+                    tauri::WindowEvent::ThemeChanged(theme) => {
+                        let theme = theme_to_string(*theme).to_string();
+                        let _ = main_clone.emit("nalu://system-theme-changed", theme);
+                    }
+                    _ => {}
                 });
             }
 
