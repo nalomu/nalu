@@ -5,10 +5,13 @@ use axum::{
     routing::{get, put},
 };
 use nalu_shared::models::{ColumnWithTasks, GroupData, Task, TaskColumn};
+use rusqlite::Row;
 use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::state::{self, SharedState};
+
+const TASK_SELECT: &str = "id, project, title, done, COALESCE(progress,0), COALESCE(column_id,''), COALESCE(position,0), created_at, updated_at, scheduled_start_at, scheduled_end_at, COALESCE(reminder_minutes,0), completed_at, COALESCE(repeat_type,'none'), recurrence_series_id, recurrence_sequence, recurrence_origin_at, COALESCE(recurrence_detached,0)";
 
 #[derive(Debug, Deserialize)]
 pub struct AddTaskRequest {
@@ -63,22 +66,13 @@ async fn get_tasks(
         .collect();
 
     let mut task_stmt = conn
-        .prepare("SELECT id, project, title, done, COALESCE(progress,0), COALESCE(column_id,''), COALESCE(position,0), created_at, updated_at FROM tasks ORDER BY position ASC")
+        .prepare(&format!(
+            "SELECT {} FROM tasks ORDER BY position ASC",
+            TASK_SELECT
+        ))
         .map_err(|e| (e500(), e.to_string()))?;
     let all_tasks: Vec<Task> = task_stmt
-        .query_map([], |row| {
-            Ok(Task {
-                id: row.get(0)?,
-                project: row.get(1)?,
-                title: row.get(2)?,
-                done: row.get::<_, i32>(3)? != 0,
-                progress: row.get(4)?,
-                column_id: row.get(5)?,
-                position: row.get(6)?,
-                created_at: row.get(7)?,
-                updated_at: row.get(8)?,
-            })
-        })
+        .query_map([], task_from_row)
         .map_err(|e| (e500(), e.to_string()))?
         .filter_map(|r| r.ok())
         .collect();
@@ -164,6 +158,15 @@ async fn add_task(
         position: max_pos,
         created_at: now.clone(),
         updated_at: now,
+        scheduled_start_at: None,
+        scheduled_end_at: None,
+        reminder_minutes: 0,
+        completed_at: None,
+        repeat_type: "none".to_string(),
+        recurrence_series_id: None,
+        recurrence_sequence: None,
+        recurrence_origin_at: None,
+        recurrence_detached: false,
     }))
 }
 
@@ -201,21 +204,9 @@ async fn update_task(
     }
 
     conn.query_row(
-        "SELECT id, project, title, done, COALESCE(progress,0), COALESCE(column_id,''), COALESCE(position,0), created_at, updated_at FROM tasks WHERE id = ?1",
+        &format!("SELECT {} FROM tasks WHERE id = ?1", TASK_SELECT),
         rusqlite::params![id],
-        |row| {
-            Ok(Task {
-                id: row.get(0)?,
-                project: row.get(1)?,
-                title: row.get(2)?,
-                done: row.get::<_, i32>(3)? != 0,
-                progress: row.get(4)?,
-                column_id: row.get(5)?,
-                position: row.get(6)?,
-                created_at: row.get(7)?,
-                updated_at: row.get(8)?,
-            })
-        },
+        task_from_row,
     )
     .map(Json)
     .map_err(|_| (StatusCode::NOT_FOUND, "Task not found".to_string()))
@@ -237,4 +228,27 @@ async fn delete_task_handler(
 
 fn e500() -> StatusCode {
     StatusCode::INTERNAL_SERVER_ERROR
+}
+
+fn task_from_row(row: &Row<'_>) -> rusqlite::Result<Task> {
+    Ok(Task {
+        id: row.get(0)?,
+        project: row.get(1)?,
+        title: row.get(2)?,
+        done: row.get::<_, i32>(3)? != 0,
+        progress: row.get(4)?,
+        column_id: row.get(5)?,
+        position: row.get(6)?,
+        created_at: row.get(7)?,
+        updated_at: row.get(8)?,
+        scheduled_start_at: row.get(9)?,
+        scheduled_end_at: row.get(10)?,
+        reminder_minutes: row.get(11)?,
+        completed_at: row.get(12)?,
+        repeat_type: row.get(13)?,
+        recurrence_series_id: row.get(14)?,
+        recurrence_sequence: row.get(15)?,
+        recurrence_origin_at: row.get(16)?,
+        recurrence_detached: row.get::<_, i32>(17)? != 0,
+    })
 }

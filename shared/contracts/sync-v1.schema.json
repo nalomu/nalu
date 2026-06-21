@@ -10,6 +10,7 @@
     },
     "SyncTableName": {
       "type": "string",
+      "description": "schedules is legacy-compatible; Android v1 writes calendar items to tasks with scheduled_start_at.",
       "enum": ["tasks", "task_columns", "task_groups", "notes", "schedules"]
     },
     "ChangelogEntry": {

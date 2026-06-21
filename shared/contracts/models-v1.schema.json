@@ -15,7 +15,26 @@
     "Task": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "project", "title", "done", "progress", "column_id", "position", "created_at", "updated_at"],
+      "required": [
+        "id",
+        "project",
+        "title",
+        "done",
+        "progress",
+        "column_id",
+        "position",
+        "created_at",
+        "updated_at",
+        "scheduled_start_at",
+        "scheduled_end_at",
+        "reminder_minutes",
+        "completed_at",
+        "repeat_type",
+        "recurrence_series_id",
+        "recurrence_sequence",
+        "recurrence_origin_at",
+        "recurrence_detached"
+      ],
       "properties": {
         "id": { "type": "string" },
         "project": { "type": "string", "default": "default" },
@@ -25,7 +44,32 @@
         "column_id": { "type": "string" },
         "position": { "type": "integer" },
         "created_at": { "$ref": "#/$defs/dateTimeString" },
-        "updated_at": { "$ref": "#/$defs/dateTimeString" }
+        "updated_at": { "$ref": "#/$defs/dateTimeString" },
+        "scheduled_start_at": {
+          "type": ["string", "null"],
+          "description": "Calendar start time. New Android schedule items are task rows with this field set."
+        },
+        "scheduled_end_at": {
+          "type": ["string", "null"],
+          "description": "Calendar end time. Defaults to one hour after scheduled_start_at for Android v1."
+        },
+        "reminder_minutes": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0
+        },
+        "completed_at": { "type": ["string", "null"] },
+        "repeat_type": {
+          "type": "string",
+          "enum": ["none", "daily", "weekly", "monthly", "yearly"],
+          "default": "none"
+        },
+        "recurrence_series_id": { "type": ["string", "null"] },
+        "recurrence_sequence": { "type": ["integer", "null"] },
+        "recurrence_origin_at": { "type": ["string", "null"] },
+        "recurrence_detached": {
+          "$ref": "#/$defs/sqliteBoolean"
+        }
       }
     },
     "TaskColumn": {
@@ -96,6 +140,7 @@
     },
     "Schedule": {
       "type": "object",
+      "description": "Legacy schedule table model. New Android v1 schedule writes use Task rows with scheduled_start_at instead.",
       "additionalProperties": false,
       "required": ["id", "title", "scheduled_at", "reminder_minutes", "done", "created_at"],
       "properties": {

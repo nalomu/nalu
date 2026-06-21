@@ -41,6 +41,22 @@ for (const model of ['Task', 'TaskColumn', 'TaskGroup', 'Note', 'Schedule']) {
   }
 }
 
+for (const field of [
+  'scheduled_start_at',
+  'scheduled_end_at',
+  'reminder_minutes',
+  'completed_at',
+  'repeat_type',
+  'recurrence_series_id',
+  'recurrence_sequence',
+  'recurrence_origin_at',
+  'recurrence_detached',
+]) {
+  if (!modelsSchema.$defs.Task.required.includes(field) || !modelsSchema.$defs.Task.properties[field]) {
+    throw new Error(`Missing scheduled task field in Task contract: ${field}`);
+  }
+}
+
 for (const pathName of ['/auth/pair', '/sync/push', '/sync/pull']) {
   if (!openapi.includes(pathName)) {
     throw new Error(`Missing OpenAPI path: ${pathName}`);

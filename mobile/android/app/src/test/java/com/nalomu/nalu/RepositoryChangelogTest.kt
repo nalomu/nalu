@@ -13,6 +13,7 @@ import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -48,5 +49,21 @@ class RepositoryChangelogTest {
         assertEquals(SyncTables.TASKS, pending.first().tableName)
         assertEquals(SyncOperations.INSERT, pending.first().operation)
         assertFalse(pending.first().synced)
+    }
+
+    @Test
+    fun addScheduleWritesScheduledTaskChangelogInsteadOfLegacySchedule() = runTest {
+        repository.addSchedule("Planning", "2026-06-21T09:00:00", 10)
+
+        val pending = database.dao().getPendingChangelog()
+        val task = database.dao().getTask(pending.first().rowId)
+
+        assertEquals(1, pending.size)
+        assertEquals(SyncTables.TASKS, pending.first().tableName)
+        assertEquals(SyncOperations.INSERT, pending.first().operation)
+        assertNotNull(task)
+        assertEquals("2026-06-21T09:00:00", task?.scheduledStartAt)
+        assertEquals("2026-06-21T10:00:00", task?.scheduledEndAt)
+        assertEquals(10, task?.reminderMinutes)
     }
 }

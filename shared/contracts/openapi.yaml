@@ -107,7 +107,7 @@ components:
     SyncTableName:
       type: string
       enum: [tasks, task_columns, task_groups, notes, schedules]
-      description: task_groups uses project as row_id; all other tables use id.
+      description: task_groups uses project as row_id; schedules is legacy-compatible and Android v1 writes calendar items to tasks.
     ChangelogEntry:
       type: object
       additionalProperties: false

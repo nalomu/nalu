@@ -4,7 +4,6 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.nalomu.nalu.core.database.NoteEntity
-import com.nalomu.nalu.core.database.ScheduleEntity
 import com.nalomu.nalu.core.database.SyncStateEntity
 import com.nalomu.nalu.core.database.TaskEntity
 import com.nalomu.nalu.core.repository.NaluRepository
@@ -19,7 +18,7 @@ import kotlinx.coroutines.launch
 data class NaluUiState(
     val tasks: List<TaskEntity> = emptyList(),
     val notes: List<NoteEntity> = emptyList(),
-    val schedules: List<ScheduleEntity> = emptyList(),
+    val schedules: List<TaskEntity> = emptyList(),
     val settings: SyncSettings = SyncSettings(),
     val syncState: SyncStateEntity? = null,
     val busy: Boolean = false,
@@ -33,7 +32,7 @@ class NaluViewModel(
     private val baseState = combine(
         repository.observeTasks(),
         repository.observeNotes(),
-        repository.observeSchedules(),
+        repository.observeCalendarTasks(),
         settingsStore.settings,
         repository.observeSyncState()
     ) { tasks, notes, schedules, settings, syncState ->
@@ -118,12 +117,12 @@ class NaluViewModel(
         "日程已保存"
     }
 
-    fun toggleSchedule(schedule: ScheduleEntity) = launchWithMessage {
+    fun toggleSchedule(schedule: TaskEntity) = launchWithMessage {
         repository.toggleSchedule(schedule)
         "日程已更新"
     }
 
-    fun deleteSchedule(schedule: ScheduleEntity) = launchWithMessage {
+    fun deleteSchedule(schedule: TaskEntity) = launchWithMessage {
         repository.deleteSchedule(schedule)
         "日程已删除"
     }

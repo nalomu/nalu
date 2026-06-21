@@ -6,6 +6,7 @@ import com.nalomu.nalu.core.database.NaluDatabase
 import com.nalomu.nalu.core.repository.NaluRepository
 import com.nalomu.nalu.core.settings.SettingsStore
 import com.nalomu.nalu.core.sync.SyncManager
+import com.nalomu.nalu.core.sync.SyncWorker
 
 class NaluApp : Application() {
     lateinit var container: AppContainer
@@ -17,13 +18,17 @@ class NaluApp : Application() {
             this,
             NaluDatabase::class.java,
             "nalu-mobile.db"
-        ).build()
+        )
+            .fallbackToDestructiveMigration(true)
+            .build()
         val settingsStore = SettingsStore(this)
         val syncManager = SyncManager(database, settingsStore)
         container = AppContainer(
             database = database,
             settingsStore = settingsStore,
-            repository = NaluRepository(database, syncManager),
+            repository = NaluRepository(database, syncManager) {
+                SyncWorker.enqueue(this)
+            },
             syncManager = syncManager
         )
     }

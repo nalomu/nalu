@@ -17,7 +17,16 @@ data class TaskEntity(
     @SerialName("column_id") @ColumnInfo(name = "column_id") val columnId: String = "",
     val position: Long = 0,
     @SerialName("created_at") @ColumnInfo(name = "created_at") val createdAt: String,
-    @SerialName("updated_at") @ColumnInfo(name = "updated_at") val updatedAt: String
+    @SerialName("updated_at") @ColumnInfo(name = "updated_at") val updatedAt: String,
+    @SerialName("scheduled_start_at") @ColumnInfo(name = "scheduled_start_at") val scheduledStartAt: String? = null,
+    @SerialName("scheduled_end_at") @ColumnInfo(name = "scheduled_end_at") val scheduledEndAt: String? = null,
+    @SerialName("reminder_minutes") @ColumnInfo(name = "reminder_minutes") val reminderMinutes: Int = 0,
+    @SerialName("completed_at") @ColumnInfo(name = "completed_at") val completedAt: String? = null,
+    @SerialName("repeat_type") @ColumnInfo(name = "repeat_type") val repeatType: String = "none",
+    @SerialName("recurrence_series_id") @ColumnInfo(name = "recurrence_series_id") val recurrenceSeriesId: String? = null,
+    @SerialName("recurrence_sequence") @ColumnInfo(name = "recurrence_sequence") val recurrenceSequence: Long? = null,
+    @SerialName("recurrence_origin_at") @ColumnInfo(name = "recurrence_origin_at") val recurrenceOriginAt: String? = null,
+    @SerialName("recurrence_detached") @ColumnInfo(name = "recurrence_detached") val recurrenceDetached: Boolean = false
 )
 
 @Serializable

@@ -193,14 +193,7 @@ fn upsert_row(
             continue;
         }
         set_clauses.push(format!("{} = ?", key));
-        values.push(match value {
-            serde_json::Value::String(s) => Box::new(s.clone()) as Box<dyn rusqlite::types::ToSql>,
-            serde_json::Value::Number(n) if n.is_i64() => {
-                Box::new(n.as_i64().unwrap()) as Box<dyn rusqlite::types::ToSql>
-            }
-            serde_json::Value::Bool(b) => Box::new(*b as i32) as Box<dyn rusqlite::types::ToSql>,
-            _ => Box::new(value.to_string()) as Box<dyn rusqlite::types::ToSql>,
-        });
+        values.push(json_value_to_sql(value));
     }
 
     if set_clauses.is_empty() {
@@ -231,18 +224,7 @@ fn upsert_row(
         let mut insert_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
         for key in &columns {
             let value = &fields[key];
-            insert_values.push(match value {
-                serde_json::Value::String(s) => {
-                    Box::new(s.clone()) as Box<dyn rusqlite::types::ToSql>
-                }
-                serde_json::Value::Number(n) if n.is_i64() => {
-                    Box::new(n.as_i64().unwrap()) as Box<dyn rusqlite::types::ToSql>
-                }
-                serde_json::Value::Bool(b) => {
-                    Box::new(*b as i32) as Box<dyn rusqlite::types::ToSql>
-                }
-                _ => Box::new(value.to_string()) as Box<dyn rusqlite::types::ToSql>,
-            });
+            insert_values.push(json_value_to_sql(value));
         }
 
         let insert_sql = format!(
@@ -262,6 +244,18 @@ fn upsert_row(
     }
 
     Ok(())
+}
+
+fn json_value_to_sql(value: &serde_json::Value) -> Box<dyn rusqlite::types::ToSql> {
+    match value {
+        serde_json::Value::Null => Box::new(rusqlite::types::Null),
+        serde_json::Value::String(s) => Box::new(s.clone()),
+        serde_json::Value::Number(n) if n.is_i64() => Box::new(n.as_i64().unwrap()),
+        serde_json::Value::Number(n) if n.is_u64() => Box::new(n.as_u64().unwrap() as i64),
+        serde_json::Value::Number(n) if n.is_f64() => Box::new(n.as_f64().unwrap()),
+        serde_json::Value::Bool(b) => Box::new(*b as i32),
+        _ => Box::new(value.to_string()),
+    }
 }
 
 fn sync_key_column(table_name: &str) -> Result<&'static str, (StatusCode, String)> {
@@ -313,6 +307,26 @@ mod tests {
                 sort_order INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL DEFAULT (datetime('now')),
                 updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            CREATE TABLE tasks (
+                id TEXT PRIMARY KEY,
+                project TEXT NOT NULL DEFAULT 'default',
+                title TEXT NOT NULL,
+                done INTEGER NOT NULL DEFAULT 0,
+                progress INTEGER NOT NULL DEFAULT 0,
+                column_id TEXT NOT NULL DEFAULT '',
+                position INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+                scheduled_start_at TEXT,
+                scheduled_end_at TEXT,
+                reminder_minutes INTEGER NOT NULL DEFAULT 0,
+                completed_at TEXT,
+                repeat_type TEXT NOT NULL DEFAULT 'none',
+                recurrence_series_id TEXT,
+                recurrence_sequence INTEGER,
+                recurrence_origin_at TEXT,
+                recurrence_detached INTEGER NOT NULL DEFAULT 0
             );
             ",
         )
@@ -407,6 +421,33 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn upsert_row_accepts_scheduled_task_payload_and_preserves_nulls() {
+        let conn = test_conn();
+
+        upsert_row(
+            &conn,
+            "tasks",
+            "task-1",
+            r#"{"id":"task-1","project":"2026-06-21","title":"Plan","done":false,"progress":0,"column_id":"","position":0,"created_at":"2026-06-21T08:00:00Z","updated_at":"2026-06-21T08:00:00Z","scheduled_start_at":"2026-06-21T09:00:00","scheduled_end_at":"2026-06-21T10:00:00","reminder_minutes":10,"completed_at":null,"repeat_type":"none","recurrence_series_id":null,"recurrence_sequence":null,"recurrence_origin_at":null,"recurrence_detached":false}"#,
+        )
+        .unwrap();
+
+        let row: (String, Option<String>, i64, Option<String>, i64) = conn
+            .query_row(
+                "SELECT scheduled_start_at, completed_at, reminder_minutes, recurrence_series_id, recurrence_detached FROM tasks WHERE id = 'task-1'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+            )
+            .unwrap();
+
+        assert_eq!(row.0, "2026-06-21T09:00:00");
+        assert_eq!(row.1, None);
+        assert_eq!(row.2, 10);
+        assert_eq!(row.3, None);
+        assert_eq!(row.4, 0);
     }
 }
 

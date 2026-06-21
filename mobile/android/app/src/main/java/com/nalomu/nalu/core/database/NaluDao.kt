@@ -13,11 +13,14 @@ interface NaluDao {
     @Query("SELECT * FROM tasks ORDER BY project ASC, position ASC, updated_at DESC")
     fun observeTasks(): Flow<List<TaskEntity>>
 
+    @Query("SELECT * FROM tasks WHERE scheduled_start_at IS NOT NULL ORDER BY scheduled_start_at ASC, position ASC")
+    fun observeCalendarTasks(): Flow<List<TaskEntity>>
+
     @Query("SELECT * FROM notes ORDER BY updated_at DESC")
     fun observeNotes(): Flow<List<NoteEntity>>
 
     @Query("SELECT * FROM schedules ORDER BY scheduled_at ASC")
-    fun observeSchedules(): Flow<List<ScheduleEntity>>
+    fun observeLegacySchedules(): Flow<List<ScheduleEntity>>
 
     @Query("SELECT * FROM sync_state WHERE id = 'default'")
     fun observeSyncState(): Flow<SyncStateEntity?>
@@ -63,9 +66,6 @@ interface NaluDao {
 
     @Update
     suspend fun updateNote(note: NoteEntity)
-
-    @Update
-    suspend fun updateSchedule(schedule: ScheduleEntity)
 
     @Query("DELETE FROM tasks WHERE id = :id")
     suspend fun deleteTask(id: String)
@@ -118,23 +118,6 @@ interface NaluDao {
         )
     }
 
-    @Transaction
-    suspend fun recordScheduleChange(schedule: ScheduleEntity, operation: String, payload: String, rowId: String = schedule.id) {
-        if (operation == SyncOperations.DELETE) {
-            deleteSchedule(rowId)
-        } else {
-            upsertSchedule(schedule)
-        }
-        insertChangelog(
-            ChangelogEntity(
-                tableName = SyncTables.SCHEDULES,
-                rowId = rowId,
-                operation = operation,
-                payload = payload,
-                clientTs = System.currentTimeMillis()
-            )
-        )
-    }
 }
 
 object SyncOperations {

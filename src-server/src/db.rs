@@ -24,7 +24,16 @@ fn init_schema(conn: &Connection) -> Result<(), String> {
             column_id TEXT NOT NULL DEFAULT '',
             position INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL DEFAULT (datetime('now')),
-            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+            scheduled_start_at TEXT,
+            scheduled_end_at TEXT,
+            reminder_minutes INTEGER NOT NULL DEFAULT 0,
+            completed_at TEXT,
+            repeat_type TEXT NOT NULL DEFAULT 'none',
+            recurrence_series_id TEXT,
+            recurrence_sequence INTEGER,
+            recurrence_origin_at TEXT,
+            recurrence_detached INTEGER NOT NULL DEFAULT 0
         );
 
         CREATE TABLE IF NOT EXISTS task_columns (
@@ -89,5 +98,55 @@ fn init_schema(conn: &Connection) -> Result<(), String> {
     )
     .map_err(|e| e.to_string())?;
 
+    for (column, definition) in [
+        ("scheduled_start_at", "TEXT"),
+        ("scheduled_end_at", "TEXT"),
+        ("reminder_minutes", "INTEGER NOT NULL DEFAULT 0"),
+        ("completed_at", "TEXT"),
+        ("repeat_type", "TEXT NOT NULL DEFAULT 'none'"),
+        ("recurrence_series_id", "TEXT"),
+        ("recurrence_sequence", "INTEGER"),
+        ("recurrence_origin_at", "TEXT"),
+        ("recurrence_detached", "INTEGER NOT NULL DEFAULT 0"),
+    ] {
+        ensure_column(conn, "tasks", column, definition)?;
+    }
+
+    conn.execute_batch(
+        "
+        CREATE INDEX IF NOT EXISTS idx_tasks_scheduled_start_at
+            ON tasks (scheduled_start_at);
+
+        CREATE INDEX IF NOT EXISTS idx_tasks_recurrence_series_id
+            ON tasks (recurrence_series_id);
+        ",
+    )
+    .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+fn ensure_column(
+    conn: &Connection,
+    table: &str,
+    column: &str,
+    definition: &str,
+) -> Result<(), String> {
+    let mut stmt = conn
+        .prepare(&format!("PRAGMA table_info({})", table))
+        .map_err(|e| e.to_string())?;
+    let columns = stmt
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(|e| e.to_string())?
+        .filter_map(Result::ok)
+        .collect::<Vec<_>>();
+    if columns.iter().any(|existing| existing == column) {
+        return Ok(());
+    }
+    conn.execute(
+        &format!("ALTER TABLE {} ADD COLUMN {} {}", table, column, definition),
+        [],
+    )
+    .map_err(|e| e.to_string())?;
     Ok(())
 }

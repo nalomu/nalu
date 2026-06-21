@@ -11,6 +11,9 @@ mobile/android
 `src-tauri/gen/android` 是 Tauri Mobile 生成目录，只保留作 legacy/实验调试参考，不作为
 Nalu Mobile 的正式开发主线。日常移动端开发、构建和测试都应从 `mobile/android` 进入。
 
+当前原生工程暂用 `compileSdk = 35` / `targetSdk = 35`。本机 Android 36 platform 在 AGP
+JDK image transform 阶段不稳定，等 SDK/JDK 组合稳定后再统一升到 36。
+
 ## SDK 路径
 
 当前 Android SDK 放在外置盘：

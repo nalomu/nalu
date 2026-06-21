@@ -13,11 +13,11 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.Note
 import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Event
 import androidx.compose.material.icons.outlined.Home
-import androidx.compose.material.icons.outlined.Note
 import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Sync
@@ -27,8 +27,8 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
-import androidx.compose.material3.Divider
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -62,7 +62,6 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.nalomu.nalu.core.database.NoteEntity
-import com.nalomu.nalu.core.database.ScheduleEntity
 import com.nalomu.nalu.core.database.TaskEntity
 import com.nalomu.nalu.core.sync.NotificationHelper
 import kotlinx.coroutines.delay
@@ -142,7 +141,7 @@ fun NaluMobileRoot(viewModel: NaluViewModel) {
 private fun Destination.icon() = when (this) {
     Destination.Home -> Icons.Outlined.Home
     Destination.Tasks -> Icons.Outlined.TaskAlt
-    Destination.Notes -> Icons.Outlined.Note
+    Destination.Notes -> Icons.AutoMirrored.Outlined.Note
     Destination.Schedules -> Icons.Outlined.Event
     Destination.Pomodoro -> Icons.Outlined.PlayArrow
     Destination.Settings -> Icons.Outlined.Settings
@@ -305,6 +304,7 @@ private fun TaskRow(
 }
 
 @Composable
+@Suppress("DEPRECATION")
 private fun NotesScreen(uiState: NaluUiState, viewModel: NaluViewModel) {
     val clipboard = LocalClipboardManager.current
     var title by remember { mutableStateOf("") }
@@ -357,7 +357,7 @@ private fun NoteRow(note: NoteEntity, onDelete: () -> Unit) {
 private fun SchedulesScreen(uiState: NaluUiState, viewModel: NaluViewModel) {
     var title by remember { mutableStateOf("") }
     var scheduledAt by remember { mutableStateOf("") }
-    var reminder by remember { mutableStateOf("5") }
+    var reminder by remember { mutableStateOf("0") }
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(16.dp),
@@ -369,7 +369,7 @@ private fun SchedulesScreen(uiState: NaluUiState, viewModel: NaluViewModel) {
                 OutlinedTextField(value = scheduledAt, onValueChange = { scheduledAt = it }, label = { Text("时间") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
                 OutlinedTextField(value = reminder, onValueChange = { reminder = it.filter(Char::isDigit) }, label = { Text("提前分钟") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
                 Button(onClick = {
-                    viewModel.addSchedule(title, scheduledAt, reminder.toIntOrNull() ?: 5)
+                    viewModel.addSchedule(title, scheduledAt, reminder.toIntOrNull() ?: 0)
                     title = ""
                     scheduledAt = ""
                 }) { Text("保存") }
@@ -382,7 +382,7 @@ private fun SchedulesScreen(uiState: NaluUiState, viewModel: NaluViewModel) {
 }
 
 @Composable
-private fun ScheduleRow(schedule: ScheduleEntity, onToggle: () -> Unit, onDelete: () -> Unit) {
+private fun ScheduleRow(schedule: TaskEntity, onToggle: () -> Unit, onDelete: () -> Unit) {
     Card {
         Row(modifier = Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onToggle) {
@@ -390,7 +390,7 @@ private fun ScheduleRow(schedule: ScheduleEntity, onToggle: () -> Unit, onDelete
             }
             Column(modifier = Modifier.weight(1f)) {
                 Text(schedule.title, fontWeight = FontWeight.Medium)
-                Text(schedule.scheduledAt, style = MaterialTheme.typography.bodySmall)
+                Text(schedule.scheduledStartAt.orEmpty(), style = MaterialTheme.typography.bodySmall)
             }
             IconButton(onClick = onDelete) {
                 Icon(Icons.Outlined.Delete, contentDescription = "删除")
@@ -482,6 +482,6 @@ private fun SectionHeader(text: String) {
     Column {
         Text(text, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
         Spacer(Modifier.height(6.dp))
-        Divider()
+        HorizontalDivider()
     }
 }

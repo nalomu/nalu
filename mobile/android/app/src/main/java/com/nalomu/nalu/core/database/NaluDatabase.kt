@@ -14,7 +14,7 @@ import androidx.room.RoomDatabase
         SyncStateEntity::class,
         DeviceStateEntity::class
     ],
-    version = 1,
+    version = 2,
     exportSchema = false
 )
 abstract class NaluDatabase : RoomDatabase() {

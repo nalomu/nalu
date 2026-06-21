@@ -11,6 +11,9 @@ mobile/android
 它是 Kotlin / Jetpack Compose / Room 原生工程，不依赖 Vue UI、Tauri IPC 或 Desktop Rust
 Core。移动端只共享协议、数据模型、同步规则、错误码和 design token。
 
+Android 原生日程新建数据写入 `tasks.scheduled_start_at` / `scheduled_end_at` /
+`reminder_minutes`，旧 `schedules` 表只做兼容读取，不作为新建日程主路径。
+
 构建和运行单元测试：
 
 ```bash

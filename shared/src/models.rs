@@ -11,6 +11,15 @@ pub struct Task {
     pub position: i64,
     pub created_at: String,
     pub updated_at: String,
+    pub scheduled_start_at: Option<String>,
+    pub scheduled_end_at: Option<String>,
+    pub reminder_minutes: i32,
+    pub completed_at: Option<String>,
+    pub repeat_type: String,
+    pub recurrence_series_id: Option<String>,
+    pub recurrence_sequence: Option<i64>,
+    pub recurrence_origin_at: Option<String>,
+    pub recurrence_detached: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
