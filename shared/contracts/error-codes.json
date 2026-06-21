@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Nalu Error Codes",
+  "version": "1.0.0",
+  "codes": [
+    {
+      "code": "AUTH_PAIRING_CODE_INVALID",
+      "httpStatus": 403,
+      "message": "Invalid pairing code"
+    },
+    {
+      "code": "AUTH_TOKEN_MISSING",
+      "httpStatus": 401,
+      "message": "Missing Authorization header"
+    },
+    {
+      "code": "AUTH_TOKEN_INVALID",
+      "httpStatus": 401,
+      "message": "Invalid token"
+    },
+    {
+      "code": "SYNC_TABLE_UNSUPPORTED",
+      "httpStatus": 400,
+      "message": "Unsupported sync table"
+    },
+    {
+      "code": "SYNC_CONFLICT",
+      "httpStatus": 200,
+      "message": "Server has a newer version of the row"
+    },
+    {
+      "code": "VALIDATION_FAILED",
+      "httpStatus": 400,
+      "message": "Request payload failed validation"
+    },
+    {
+      "code": "INTERNAL_SERVER_ERROR",
+      "httpStatus": 500,
+      "message": "Unexpected server error"
+    }
+  ]
+}

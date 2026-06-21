@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nalomu.local/contracts/sync-v1.schema.json",
+  "title": "Nalu Sync v1",
+  "type": "object",
+  "$defs": {
+    "SyncOperation": {
+      "type": "string",
+      "enum": ["insert", "update", "delete"]
+    },
+    "SyncTableName": {
+      "type": "string",
+      "enum": ["tasks", "task_columns", "task_groups", "notes", "schedules"]
+    },
+    "ChangelogEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "table_name", "row_id", "operation", "payload", "client_ts", "server_ts", "synced"],
+      "properties": {
+        "id": {
+          "type": ["integer", "null"],
+          "description": "Local changelog id. Server pull entries use null."
+        },
+        "table_name": { "$ref": "#/$defs/SyncTableName" },
+        "row_id": {
+          "type": "string",
+          "description": "Row key. For task_groups this is project; for all other sync tables this is id."
+        },
+        "operation": { "$ref": "#/$defs/SyncOperation" },
+        "payload": {
+          "type": "string",
+          "description": "JSON string containing the row fields for insert/update. Delete payload may be an empty object string."
+        },
+        "client_ts": {
+          "type": "integer",
+          "description": "Client-side millisecond or monotonic timestamp from the producing client."
+        },
+        "server_ts": {
+          "type": ["integer", "null"],
+          "description": "Server changelog sequence. This is the cursor used by last_server_ts."
+        },
+        "synced": {
+          "type": "boolean",
+          "description": "Stored as INTEGER 0/1 in SQLite on clients."
+        }
+      }
+    },
+    "SyncPushRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["device_id", "last_server_ts", "entries"],
+      "properties": {
+        "device_id": { "type": "string" },
+        "last_server_ts": { "type": "integer" },
+        "entries": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/ChangelogEntry" }
+        }
+      }
+    },
+    "SyncAck": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["client_entry_id", "server_ts"],
+      "properties": {
+        "client_entry_id": { "type": "integer" },
+        "server_ts": { "type": "integer" }
+      }
+    },
+    "SyncPushResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["accepted", "conflicts"],
+      "properties": {
+        "accepted": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/SyncAck" }
+        },
+        "conflicts": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/ChangelogEntry" }
+        }
+      }
+    },
+    "SyncPullRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["device_id", "last_server_ts"],
+      "properties": {
+        "device_id": { "type": "string" },
+        "last_server_ts": { "type": "integer" }
+      }
+    },
+    "SyncPullResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["entries", "latest_server_ts"],
+      "properties": {
+        "entries": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/ChangelogEntry" }
+        },
+        "latest_server_ts": { "type": "integer" }
+      }
+    }
+  }
+}

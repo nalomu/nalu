@@ -13,6 +13,11 @@ vite.config.ts.timestamp-*
 test-results/
 target/
 
+# Android native client build outputs
+mobile/android/.gradle/
+mobile/android/build/
+mobile/android/app/build/
+
 # Android signing keys (generated locally, CI uses secrets)
 *.keystore
 *.jks

@@ -1,5 +1,33 @@
 # 手机端查看和测试
 
+## 正式 Android 原生端
+
+Nalu Mobile 的正式 Android 端位于：
+
+```text
+mobile/android
+```
+
+它是 Kotlin / Jetpack Compose / Room 原生工程，不依赖 Vue UI、Tauri IPC 或 Desktop Rust
+Core。移动端只共享协议、数据模型、同步规则、错误码和 design token。
+
+构建和运行单元测试：
+
+```bash
+cd mobile/android
+./gradlew :app:assembleDebug
+./gradlew testDebugUnitTest
+```
+
+真机安装：
+
+```bash
+adb devices
+adb install -r mobile/android/app/build/outputs/apk/debug/app-debug.apk
+```
+
+`src-tauri/gen/android` 仅为 Tauri Mobile legacy 生成工程，不作为正式移动端测试入口。
+
 ## 浏览器响应式预览
 
 只看布局时，先用 Vite：
@@ -10,13 +38,13 @@ pnpm dev
 
 在浏览器 DevTools 中切换手机尺寸，适合快速检查首页、设置页、闹钟页和番茄钟页的响应式布局。
 
-## Android 真机 APK
+## Tauri Android legacy 真机 APK
 
-日常调试优先使用 Tauri Android dev，它会把开发版安装到已连接设备，并连接本机 Vite：
+以下流程只用于旧 Tauri Mobile 工程排查。它会把开发版安装到已连接设备，并连接本机 Vite：
 
 ```bash
 adb devices
-pnpm tauri android dev
+pnpm tauri:dev:android:legacy
 ```
 
 查看 Android 运行日志：

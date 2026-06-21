@@ -1,0 +1,111 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nalomu.local/contracts/models-v1.schema.json",
+  "title": "Nalu Models v1",
+  "type": "object",
+  "$defs": {
+    "dateTimeString": {
+      "type": "string",
+      "description": "RFC 3339 timestamp when produced by application code; SQLite datetime('now') values may be space-separated UTC strings on legacy rows."
+    },
+    "sqliteBoolean": {
+      "type": "boolean",
+      "description": "Stored as INTEGER 0/1 in SQLite and exposed as boolean in JSON."
+    },
+    "Task": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "project", "title", "done", "progress", "column_id", "position", "created_at", "updated_at"],
+      "properties": {
+        "id": { "type": "string" },
+        "project": { "type": "string", "default": "default" },
+        "title": { "type": "string" },
+        "done": { "$ref": "#/$defs/sqliteBoolean" },
+        "progress": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "column_id": { "type": "string" },
+        "position": { "type": "integer" },
+        "created_at": { "$ref": "#/$defs/dateTimeString" },
+        "updated_at": { "$ref": "#/$defs/dateTimeString" }
+      }
+    },
+    "TaskColumn": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "project", "name", "sort_order", "created_at", "updated_at"],
+      "properties": {
+        "id": { "type": "string" },
+        "project": { "type": "string", "default": "default" },
+        "name": { "type": "string", "default": "任务" },
+        "sort_order": { "type": "integer" },
+        "created_at": { "$ref": "#/$defs/dateTimeString" },
+        "updated_at": { "$ref": "#/$defs/dateTimeString" }
+      }
+    },
+    "TaskGroup": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["project", "sort_order", "created_at", "updated_at"],
+      "properties": {
+        "project": {
+          "type": "string",
+          "description": "Primary sync key for task_groups. Do not use an id column."
+        },
+        "sort_order": { "type": "integer" },
+        "created_at": { "$ref": "#/$defs/dateTimeString" },
+        "updated_at": { "$ref": "#/$defs/dateTimeString" }
+      }
+    },
+    "ColumnWithTasks": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["column", "tasks"],
+      "properties": {
+        "column": { "$ref": "#/$defs/TaskColumn" },
+        "tasks": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/Task" }
+        }
+      }
+    },
+    "GroupData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["project", "sort_order", "columns"],
+      "properties": {
+        "project": { "type": "string" },
+        "sort_order": { "type": "integer" },
+        "columns": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/ColumnWithTasks" }
+        }
+      }
+    },
+    "Note": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "title", "content", "tags", "note_type", "created_at", "updated_at"],
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "content": { "type": "string", "default": "" },
+        "tags": { "type": "string", "default": "" },
+        "note_type": { "type": "string", "default": "memo" },
+        "created_at": { "$ref": "#/$defs/dateTimeString" },
+        "updated_at": { "$ref": "#/$defs/dateTimeString" }
+      }
+    },
+    "Schedule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "title", "scheduled_at", "reminder_minutes", "done", "created_at"],
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "scheduled_at": { "$ref": "#/$defs/dateTimeString" },
+        "reminder_minutes": { "type": "integer", "default": 5 },
+        "done": { "$ref": "#/$defs/sqliteBoolean" },
+        "created_at": { "$ref": "#/$defs/dateTimeString" }
+      }
+    }
+  }
+}

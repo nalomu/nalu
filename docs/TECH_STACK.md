@@ -148,10 +148,10 @@ nalomu-uni-platform/
 └── README.md
 ```
 
-移动端正式工程暂不放进当前主线结构。后续需要 Android 时，优先在 `mobile/android/`
-新增 Kotlin / Jetpack Compose 原生端；iOS 在 `mobile/ios/` 预留 Swift / SwiftUI
-方向。移动端与桌面端共享协议、数据模型、同步规则、错误码和设计 token，不共享 Vue UI
-或桌面端 Rust Core。
+移动端正式工程放在 `mobile/android/`，使用 Kotlin / Jetpack Compose / Room 原生实现。
+`src-tauri/gen/android` 是 Tauri Mobile legacy 生成目录，不作为正式 Android 主线。iOS 在
+`mobile/ios/` 预留 Swift / SwiftUI 方向。移动端与桌面端共享协议、数据模型、同步规则、
+错误码和设计 token，不共享 Vue UI、Tauri IPC 或桌面端 Rust Core。
 
 ---
 
@@ -210,7 +210,7 @@ tauri-build = { version = "2", features = [] }
     "docs:dev": "vuepress dev docs",
     "docs:build": "vuepress build docs",
     "tauri:dev": "tauri dev",
-    "tauri:dev:android": "tauri android dev",
+    "tauri:dev:android:legacy": "tauri android dev",
     "tauri:build": "tauri build"
   },
   "dependencies": {
@@ -268,17 +268,18 @@ tauri-build = { version = "2", features = [] }
 
 目标：把跨端真正需要共享的内容收敛到 `shared/`。
 
-- [ ] 任务、笔记、日程等数据模型契约
-- [ ] 同步消息格式和冲突处理规则
-- [ ] 错误码、导入导出格式、加密/压缩规则
+- [x] 任务、笔记、日程等数据模型契约
+- [x] 同步消息格式和冲突处理规则
+- [x] 错误码基础契约
+- [ ] 导入导出格式、加密/压缩规则
 - [ ] 设计 token，供 Vue、Compose、SwiftUI 各端映射
 
 ### Phase 3：私有同步服务
 
 目标：让桌面端和后续移动端通过同一套同步协议交换变更。
 
-- [ ] `src-server/` 中继服务稳定化
-- [ ] WebSocket 同步通道
+- [x] `src-server/` HTTP changelog 同步服务基础
+- [ ] WebSocket 同步通道（future）
 - [ ] 设备身份、认证和重放策略
 - [ ] 离线变更补偿和日志清理
 
@@ -286,10 +287,11 @@ tauri-build = { version = "2", features = [] }
 
 目标：新开 Kotlin / Jetpack Compose 原生端，只接同步协议和移动端核心功能。
 
-- [ ] `mobile/android/` 工程
-- [ ] Room / SQLite 本地副本
-- [ ] 同步协议客户端
-- [ ] 通知、分享入口、快捷入口等 Android 原生能力
+- [x] `mobile/android/` 工程
+- [x] Room / SQLite 本地副本
+- [x] 同步协议客户端
+- [x] 通知、分享入口等 Android 原生能力基础
+- [ ] 快捷入口和精确日程提醒
 
 ### Phase 5：iOS 轻端
 

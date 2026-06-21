@@ -36,7 +36,8 @@
 │  └───────────────────────────────────────────────────────────┘  │
 │                              │                                   │
 └──────────────────────────────┼───────────────────────────────────┘
-                               │ WebSocket（仅同步时连接）
+                               │ HTTP changelog sync（v1）
+                               │ WebSocket / Automerge relay（future）
                                │
 ┌──────────────────────────────┼───────────────────────────────────┐
 │                         MOBILE CLIENTS                           │
@@ -52,16 +53,16 @@
 │                     SERVER（Linux VPS / 自建服务器）               │
 │                              │                                   │
 │  ┌───────────────────────────────────────────────────────────┐  │
-│  │  同步中继服务（Relay Server）                               │  │
+│  │  同步服务（Sync Server）                                     │  │
 │  │                                                           │  │
 │  │  ┌──────────┐ ┌──────────┐ ┌──────────┐                  │  │
-│  │  │ axum     │ │ WebSocket│ │ Automerge│                  │  │
-│  │  │ HTTP 服务│ │ 长连接   │ │ 变更集   │                  │  │
-│  │  │          │ │ 广播     │ │ 中转存储  │                  │  │
+│  │  │ axum     │ │ HTTP     │ │ SQLite   │                  │  │
+│  │  │ HTTP 服务│ │ push/pull│ │ changelog│                  │  │
+│  │  │          │ │ 同步     │ │ 存储     │                  │  │
 │  │  └──────────┘ └──────────┘ └──────────┘                  │  │
 │  │                                                           │  │
-│  │  职责：仅中转 CRDT 变更集，不解析业务数据                     │  │
-│  │  数据：只存变更日志（可定期清理），不存明文                    │  │
+│  │  v1 职责：保存业务表快照和 changelog，提供 HTTP push/pull     │  │
+│  │  future：WebSocket / Automerge relay 可在同步链路稳定后演进    │  │
 │  └───────────────────────────────────────────────────────────┘  │
 │                                                                 │
 │  ┌───────────────────────────────────────────────────────────┐  │
@@ -114,8 +115,11 @@ Desktop Rust Core 是桌面端实现细节，不作为 Android/iOS 的共享后�
 |------|------|------|
 | UI | Jetpack Compose | 移动端原生交互和系统适配 |
 | 本地数据 | Room / SQLite | 任务、笔记、日程等本地副本 |
-| 同步客户端 | Kotlin 实现 | 按 `shared/` 契约收发同步消息 |
+| 同步客户端 | Kotlin 实现 | 按 `shared/contracts/` 契约收发 HTTP changelog 同步消息 |
 | 系统能力 | Android 原生 API | 通知、分享入口、快捷入口、后台策略、权限生命周期 |
+
+正式 Android 工程位于 `mobile/android/`。`src-tauri/gen/android` 是 Tauri Mobile 生成目录，
+仅保留作 legacy/实验调试参考，不作为 Nalu Mobile 的正式主线。
 
 ### iOS Client（暂搁置）
 
@@ -146,8 +150,8 @@ iOS 先作为轻端方向保留，等桌面端和 Android 同步链路稳定后�
 
 | 模块 | 技术 | 说明 |
 |------|------|------|
-| 同步中继 | axum 0.8.9 + WebSocket | 中转 CRDT 变更集，广播给在线设备 |
-| 变更集存储 | SQLite 或文件系统 | 暂存离线期间的变更，设备上线后推送并清理 |
+| 同步服务 | axum 0.8.9 + HTTP | `/api/auth/pair`、`/api/sync/push`、`/api/sync/pull` |
+| 变更集存储 | SQLite | 存储业务表快照和 `server_changelog`，按 `last_server_ts` 拉取 |
 | Ollama（可选） | Ollama + 开源模型 | AI 推理服务，仅当你 VPS 有足够算力时部署 |
 
 ### 不在 Server 端运行的东西
@@ -173,13 +177,13 @@ iOS 先作为轻端方向保留，等桌面端和 Android 同步链路稳定后�
         │                │
         │                ├──► SQLite 写入（本地持久化）
         │                │
-        │                └──► Automerge 生成变更集
+        │                └──► sync_changelog 记录本地变更
         │                         │
         │                         ▼
-        │              WebSocket 推送到 Relay Server
+        │              HTTP POST /api/sync/push
         │                         │
         │                         ▼
-        │              Relay 广播给其他在线设备
+        │              其他设备 HTTP POST /api/sync/pull 拉取
         │                         │
         │                         ▼
         │              Android/iOS 原生客户端收到变更集
@@ -195,14 +199,14 @@ iOS 先作为轻端方向保留，等桌面端和 Android 同步链路稳定后�
 
 ## Server 部署规格参考
 
-同步中继服务非常轻，最便宜的 VPS 就能跑：
+HTTP 同步服务非常轻，最便宜的 VPS 就能跑：
 
 | 指标 | 要求 |
 |------|------|
 | CPU | 1 核足够 |
 | 内存 | 128 MB 足够 |
 | 磁盘 | 1 GB（变更集很小，定期清理） |
-| 带宽 | 极低（只传 CRDT 变更二进制，不传业务数据） |
+| 带宽 | 极低（只传 changelog payload） |
 | 系统 | Ubuntu 22.04+ / Debian 12+ |
 | 端口 | 443 (HTTPS/WSS) |
 

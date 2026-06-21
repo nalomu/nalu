@@ -1,0 +1,197 @@
+openapi: 3.1.0
+info:
+  title: Nalu Private Sync API
+  version: 1.0.0
+  description: >
+    HTTP changelog sync contract for Nalu desktop, server, and native Android v1.
+    WebSocket/Automerge relay is a future direction and is not part of this contract.
+servers:
+  - url: http://localhost:8787/api
+security:
+  - bearerAuth: []
+paths:
+  /health:
+    get:
+      security: []
+      summary: Health check
+      responses:
+        "200":
+          description: ok
+          content:
+            text/plain:
+              schema:
+                type: string
+  /auth/pair:
+    post:
+      security: []
+      summary: Pair a device with a private Nalu sync server
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PairingRequest"
+      responses:
+        "200":
+          description: Device token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PairingResponse"
+        "403":
+          description: Invalid pairing code
+  /sync/push:
+    post:
+      summary: Push local changelog entries to the server
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SyncPushRequest"
+      responses:
+        "200":
+          description: Accepted entries and conflicts
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SyncPushResponse"
+        "401":
+          description: Missing or invalid bearer token
+  /sync/pull:
+    post:
+      summary: Pull changelog entries after last_server_ts
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SyncPullRequest"
+      responses:
+        "200":
+          description: Remote entries and latest server cursor
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SyncPullResponse"
+        "401":
+          description: Missing or invalid bearer token
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    PairingRequest:
+      type: object
+      additionalProperties: false
+      required: [pairing_code, device_name]
+      properties:
+        pairing_code:
+          type: string
+        device_name:
+          type: string
+    PairingResponse:
+      type: object
+      additionalProperties: false
+      required: [device_id, token]
+      properties:
+        device_id:
+          type: string
+        token:
+          type: string
+    SyncOperation:
+      type: string
+      enum: [insert, update, delete]
+    SyncTableName:
+      type: string
+      enum: [tasks, task_columns, task_groups, notes, schedules]
+      description: task_groups uses project as row_id; all other tables use id.
+    ChangelogEntry:
+      type: object
+      additionalProperties: false
+      required: [id, table_name, row_id, operation, payload, client_ts, server_ts, synced]
+      properties:
+        id:
+          type: integer
+          nullable: true
+        table_name:
+          $ref: "#/components/schemas/SyncTableName"
+        row_id:
+          type: string
+        operation:
+          $ref: "#/components/schemas/SyncOperation"
+        payload:
+          type: string
+          description: JSON string payload for insert/update rows.
+        client_ts:
+          type: integer
+          format: int64
+        server_ts:
+          type: integer
+          format: int64
+          nullable: true
+        synced:
+          type: boolean
+          description: Stored as SQLite INTEGER 0/1 on clients.
+    SyncPushRequest:
+      type: object
+      additionalProperties: false
+      required: [device_id, last_server_ts, entries]
+      properties:
+        device_id:
+          type: string
+        last_server_ts:
+          type: integer
+          format: int64
+        entries:
+          type: array
+          items:
+            $ref: "#/components/schemas/ChangelogEntry"
+    SyncAck:
+      type: object
+      additionalProperties: false
+      required: [client_entry_id, server_ts]
+      properties:
+        client_entry_id:
+          type: integer
+          format: int64
+        server_ts:
+          type: integer
+          format: int64
+    SyncPushResponse:
+      type: object
+      additionalProperties: false
+      required: [accepted, conflicts]
+      properties:
+        accepted:
+          type: array
+          items:
+            $ref: "#/components/schemas/SyncAck"
+        conflicts:
+          type: array
+          items:
+            $ref: "#/components/schemas/ChangelogEntry"
+    SyncPullRequest:
+      type: object
+      additionalProperties: false
+      required: [device_id, last_server_ts]
+      properties:
+        device_id:
+          type: string
+        last_server_ts:
+          type: integer
+          format: int64
+    SyncPullResponse:
+      type: object
+      additionalProperties: false
+      required: [entries, latest_server_ts]
+      properties:
+        entries:
+          type: array
+          items:
+            $ref: "#/components/schemas/ChangelogEntry"
+        latest_server_ts:
+          type: integer
+          format: int64
