@@ -62,6 +62,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.nalomu.nalu.core.database.NoteEntity
+import com.nalomu.nalu.core.database.ScheduleEntity
 import com.nalomu.nalu.core.database.TaskEntity
 import com.nalomu.nalu.core.sync.NotificationHelper
 import kotlinx.coroutines.delay
@@ -378,6 +379,18 @@ private fun SchedulesScreen(uiState: NaluUiState, viewModel: NaluViewModel) {
         items(uiState.schedules, key = { it.id }) { schedule ->
             ScheduleRow(schedule = schedule, onToggle = { viewModel.toggleSchedule(schedule) }, onDelete = { viewModel.deleteSchedule(schedule) })
         }
+        if (uiState.legacySchedules.isNotEmpty()) {
+            item {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    HorizontalDivider()
+                    Text("旧日程", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Medium)
+                    Text("来自 legacy schedules 表，只读保留", style = MaterialTheme.typography.bodySmall)
+                }
+            }
+            items(uiState.legacySchedules, key = { it.id }) { schedule ->
+                LegacyScheduleRow(schedule = schedule)
+            }
+        }
     }
 }
 
@@ -395,6 +408,21 @@ private fun ScheduleRow(schedule: TaskEntity, onToggle: () -> Unit, onDelete: ()
             IconButton(onClick = onDelete) {
                 Icon(Icons.Outlined.Delete, contentDescription = "删除")
             }
+        }
+    }
+}
+
+@Composable
+private fun LegacyScheduleRow(schedule: ScheduleEntity) {
+    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+        Row(modifier = Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Outlined.Event, contentDescription = null)
+            Spacer(modifier = Modifier.width(10.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(schedule.title, fontWeight = FontWeight.Medium)
+                Text(schedule.scheduledAt, style = MaterialTheme.typography.bodySmall)
+            }
+            AssistChip(onClick = {}, enabled = false, label = { Text("只读") })
         }
     }
 }

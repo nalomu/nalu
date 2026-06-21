@@ -4,11 +4,13 @@ import android.content.Context
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import com.nalomu.nalu.core.database.NaluDatabase
+import com.nalomu.nalu.core.database.ScheduleEntity
 import com.nalomu.nalu.core.database.SyncOperations
 import com.nalomu.nalu.core.database.SyncTables
 import com.nalomu.nalu.core.repository.NaluRepository
 import com.nalomu.nalu.core.settings.SettingsStore
 import com.nalomu.nalu.core.sync.SyncManager
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -65,5 +67,28 @@ class RepositoryChangelogTest {
         assertEquals("2026-06-21T09:00:00", task?.scheduledStartAt)
         assertEquals("2026-06-21T10:00:00", task?.scheduledEndAt)
         assertEquals(10, task?.reminderMinutes)
+    }
+
+    @Test
+    fun legacySchedulesRemainObservableButNotWrittenByNewScheduleFlow() = runTest {
+        database.dao().upsertSchedule(
+            ScheduleEntity(
+                id = "legacy-1",
+                title = "Legacy meeting",
+                scheduledAt = "2026-06-21T11:00:00",
+                reminderMinutes = 5,
+                createdAt = "2026-06-21T10:00:00"
+            )
+        )
+
+        repository.addSchedule("Task calendar item", "2026-06-21T12:00:00", 0)
+
+        val legacySchedules = repository.observeLegacySchedules().first()
+        val pending = database.dao().getPendingChangelog()
+
+        assertEquals(1, legacySchedules.size)
+        assertEquals("legacy-1", legacySchedules.first().id)
+        assertEquals(1, pending.size)
+        assertEquals(SyncTables.TASKS, pending.first().tableName)
     }
 }

@@ -13,6 +13,12 @@ Core。移动端只共享协议、数据模型、同步规则、错误码和 des
 
 Android 原生日程新建数据写入 `tasks.scheduled_start_at` / `scheduled_end_at` /
 `reminder_minutes`，旧 `schedules` 表只做兼容读取，不作为新建日程主路径。
+旧 `schedules` 远端数据会显示在日程页只读分区；Android 新增、完成、删除日程只应产生
+`tasks` changelog。
+
+本地任务、笔记、日程任务写入后会 enqueue 一次性 WorkManager 同步；App 启动时还会注册
+15 分钟联网周期同步作为兜底。手动测试离线写入时，应验证恢复网络后一次性同步和周期同步
+都不会把新日程写回 legacy `schedules` 表。
 
 构建和运行单元测试：
 

@@ -2,14 +2,17 @@ package com.nalomu.nalu.core.sync
 
 import android.content.Context
 import androidx.work.CoroutineWorker
+import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import androidx.work.workDataOf
 import androidx.work.Constraints
 import com.nalomu.nalu.NaluApp
+import java.util.concurrent.TimeUnit
 
 class SyncWorker(
     appContext: Context,
@@ -26,6 +29,7 @@ class SyncWorker(
 
     companion object {
         private const val UNIQUE_WORK = "nalu-sync-now"
+        private const val PERIODIC_WORK = "nalu-sync-periodic"
 
         fun enqueue(context: Context) {
             val request = OneTimeWorkRequestBuilder<SyncWorker>()
@@ -35,11 +39,30 @@ class SyncWorker(
                         .build()
                 )
                 .build()
-            WorkManager.getInstance(context).enqueueUniqueWork(
-                UNIQUE_WORK,
-                ExistingWorkPolicy.REPLACE,
-                request
-            )
+            runCatching {
+                WorkManager.getInstance(context).enqueueUniqueWork(
+                    UNIQUE_WORK,
+                    ExistingWorkPolicy.REPLACE,
+                    request
+                )
+            }
+        }
+
+        fun schedulePeriodic(context: Context) {
+            val request = PeriodicWorkRequestBuilder<SyncWorker>(15, TimeUnit.MINUTES)
+                .setConstraints(
+                    Constraints.Builder()
+                        .setRequiredNetworkType(NetworkType.CONNECTED)
+                        .build()
+                )
+                .build()
+            runCatching {
+                WorkManager.getInstance(context).enqueueUniquePeriodicWork(
+                    PERIODIC_WORK,
+                    ExistingPeriodicWorkPolicy.KEEP,
+                    request
+                )
+            }
         }
     }
 }

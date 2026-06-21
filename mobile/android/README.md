@@ -15,11 +15,13 @@ Stack:
 
 The app is a local-first companion client. Room is the single UI data source;
 local mutations write both the business table and `sync_changelog`, then
-WorkManager or manual sync pushes/pulls HTTP changelog entries.
+one-time WorkManager or manual sync pushes/pulls HTTP changelog entries. The app
+also registers a 15-minute connected-network periodic sync fallback on startup.
 
 Schedule items are task rows with `scheduled_start_at`, `scheduled_end_at`, and
 `reminder_minutes`. The legacy `schedules` table remains only for compatibility
-with older data and is not used for new Android writes.
+with older data and is not used for new Android writes. Legacy rows are shown in
+a read-only section on the schedule screen.
 
 The app uses the contracts in `../../shared/contracts` and does not share Vue UI,
 Tauri IPC, or Desktop Rust Core.

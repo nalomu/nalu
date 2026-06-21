@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.nalomu.nalu.core.database.NoteEntity
+import com.nalomu.nalu.core.database.ScheduleEntity
 import com.nalomu.nalu.core.database.SyncStateEntity
 import com.nalomu.nalu.core.database.TaskEntity
 import com.nalomu.nalu.core.repository.NaluRepository
@@ -19,6 +20,7 @@ data class NaluUiState(
     val tasks: List<TaskEntity> = emptyList(),
     val notes: List<NoteEntity> = emptyList(),
     val schedules: List<TaskEntity> = emptyList(),
+    val legacySchedules: List<ScheduleEntity> = emptyList(),
     val settings: SyncSettings = SyncSettings(),
     val syncState: SyncStateEntity? = null,
     val busy: Boolean = false,
@@ -29,17 +31,23 @@ class NaluViewModel(
     private val repository: NaluRepository,
     settingsStore: SettingsStore
 ) : ViewModel() {
+    private val scheduleState = combine(
+        repository.observeCalendarTasks(),
+        repository.observeLegacySchedules()
+    ) { schedules, legacySchedules -> schedules to legacySchedules }
+
     private val baseState = combine(
         repository.observeTasks(),
         repository.observeNotes(),
-        repository.observeCalendarTasks(),
+        scheduleState,
         settingsStore.settings,
         repository.observeSyncState()
-    ) { tasks, notes, schedules, settings, syncState ->
+    ) { tasks, notes, scheduleState, settings, syncState ->
         NaluUiState(
             tasks = tasks,
             notes = notes,
-            schedules = schedules,
+            schedules = scheduleState.first,
+            legacySchedules = scheduleState.second,
             settings = settings,
             syncState = syncState
         )

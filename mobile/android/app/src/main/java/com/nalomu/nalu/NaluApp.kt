@@ -31,6 +31,7 @@ class NaluApp : Application() {
             },
             syncManager = syncManager
         )
+        SyncWorker.schedulePeriodic(this)
     }
 }
 
