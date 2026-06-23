@@ -913,14 +913,24 @@ pub fn move_task(
         )
         .map_err(|e| e.to_string())?;
 
-    // Get current column and position
-    let (old_column_id, old_position): (String, i64) = tx
+    // Get current column, position, and schedule window.
+    let (old_column_id, old_position, scheduled_start_at, scheduled_end_at): (
+        String,
+        i64,
+        Option<String>,
+        Option<String>,
+    ) = tx
         .query_row(
-            "SELECT column_id, position FROM tasks WHERE id = ?1",
+            "SELECT column_id, position, scheduled_start_at, scheduled_end_at FROM tasks WHERE id = ?1",
             rusqlite::params![id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
         )
         .map_err(|e| e.to_string())?;
+    let (scheduled_start_at, scheduled_end_at) = reschedule_task_for_project(
+        scheduled_start_at.as_deref(),
+        scheduled_end_at.as_deref(),
+        &target_project,
+    )?;
 
     // Shift tasks in old column (remove gap)
     if old_column_id != target_column_id {
@@ -940,8 +950,15 @@ pub fn move_task(
 
     // Move the task
     tx.execute(
-        "UPDATE tasks SET project = ?1, column_id = ?2, position = ?3, updated_at = datetime('now') WHERE id = ?4",
-        rusqlite::params![&target_project, &target_column_id, target_position, &id],
+        "UPDATE tasks SET project = ?1, column_id = ?2, position = ?3, scheduled_start_at = ?4, scheduled_end_at = ?5, updated_at = datetime('now') WHERE id = ?6",
+        rusqlite::params![
+            &target_project,
+            &target_column_id,
+            target_position,
+            scheduled_start_at,
+            scheduled_end_at,
+            &id
+        ],
     )
     .map_err(|e| e.to_string())?;
 
@@ -974,13 +991,24 @@ pub fn create_column_by_drag(
     let conn = db.as_mut().unwrap();
     let tx = conn.transaction().map_err(|e| e.to_string())?;
 
-    let (_task_project, old_column_id, old_position): (String, String, i64) = tx
+    let (
+        _task_project,
+        old_column_id,
+        old_position,
+        scheduled_start_at,
+        scheduled_end_at,
+    ): (String, String, i64, Option<String>, Option<String>) = tx
         .query_row(
-            "SELECT project, column_id, position FROM tasks WHERE id = ?1",
+            "SELECT project, column_id, position, scheduled_start_at, scheduled_end_at FROM tasks WHERE id = ?1",
             rusqlite::params![task_id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
         )
         .map_err(|e| e.to_string())?;
+    let (scheduled_start_at, scheduled_end_at) = reschedule_task_for_project(
+        scheduled_start_at.as_deref(),
+        scheduled_end_at.as_deref(),
+        &project,
+    )?;
 
     // Get max sort order
     let max_order: i64 = tx
@@ -1000,8 +1028,8 @@ pub fn create_column_by_drag(
 
     // Move task to new column at position 0
     tx.execute(
-        "UPDATE tasks SET project = ?1, column_id = ?2, position = 0, updated_at = datetime('now') WHERE id = ?3",
-        rusqlite::params![&project, &col_id, &task_id],
+        "UPDATE tasks SET project = ?1, column_id = ?2, position = 0, scheduled_start_at = ?3, scheduled_end_at = ?4, updated_at = datetime('now') WHERE id = ?5",
+        rusqlite::params![&project, &col_id, scheduled_start_at, scheduled_end_at, &task_id],
     )
     .map_err(|e| e.to_string())?;
 
@@ -1555,6 +1583,43 @@ fn format_task_datetime(value: NaiveDateTime) -> String {
     value.format("%Y-%m-%dT%H:%M:%S").to_string()
 }
 
+fn reschedule_task_for_project(
+    scheduled_start_at: Option<&str>,
+    scheduled_end_at: Option<&str>,
+    target_project: &str,
+) -> Result<(Option<String>, Option<String>), String> {
+    if !is_date_project(target_project) {
+        return Ok((
+            scheduled_start_at.map(str::to_string),
+            scheduled_end_at.map(str::to_string),
+        ));
+    }
+
+    let Some(start_at) = scheduled_start_at else {
+        return Ok((None, scheduled_end_at.map(str::to_string)));
+    };
+    if project_from_start(start_at) == target_project {
+        return Ok((
+            Some(start_at.to_string()),
+            scheduled_end_at.map(str::to_string),
+        ));
+    }
+
+    let target_date = NaiveDate::parse_from_str(target_project, "%Y-%m-%d")
+        .map_err(|_| "INVALID_PROJECT_DATE".to_string())?;
+    let start = parse_task_datetime(start_at)?;
+    let new_start = target_date.and_time(start.time());
+    let new_end = match scheduled_end_at {
+        Some(end_at) => {
+            let end = parse_task_datetime(end_at)?;
+            Some(format_task_datetime(new_start + (end - start)))
+        }
+        None => None,
+    };
+
+    Ok((Some(format_task_datetime(new_start)), new_end))
+}
+
 fn add_months_clamped(value: NaiveDateTime, months: i32) -> NaiveDateTime {
     let base_month = value.month() as i32 - 1 + months;
     let year = value.year() + base_month.div_euclid(12);
@@ -2003,6 +2068,72 @@ mod tests {
         assert_eq!(moved_task.project, "side");
         assert_eq!(moved_task.column_id, side_column_id);
         assert_eq!(moved_task.position, 0);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn move_task_to_date_group_reschedules_calendar_task() {
+        let (_guard, path) = setup_test_db();
+        let today = Local::now().date_naive();
+        let yesterday = today - Duration::days(1);
+        let today_project = today.format("%Y-%m-%d").to_string();
+        let yesterday_project = yesterday.format("%Y-%m-%d").to_string();
+        let task = create_calendar_task(CalendarTaskInput {
+            title: "scheduled yesterday".to_string(),
+            project: None,
+            column_id: None,
+            scheduled_start_at: format!("{yesterday_project}T09:15:00"),
+            scheduled_end_at: format!("{yesterday_project}T10:45:00"),
+            reminder_minutes: Some(0),
+            repeat_type: Some("none".to_string()),
+            done: Some(false),
+        })
+        .unwrap();
+        create_task_group(today_project.clone()).unwrap();
+        let today_column_id = get_board(None)
+            .unwrap()
+            .into_iter()
+            .find(|group| group.project == today_project)
+            .and_then(|group| group.columns.into_iter().next())
+            .map(|column| column.column.id)
+            .unwrap();
+
+        let moved_task = move_task(task.id.clone(), today_column_id.clone(), 0).unwrap();
+        let expected_start_at = format!("{today_project}T09:15:00");
+        let expected_end_at = format!("{today_project}T10:45:00");
+        let board = get_board(None).unwrap();
+        let today_tasks: Vec<Task> = board
+            .iter()
+            .find(|group| group.project == today_project)
+            .unwrap()
+            .columns
+            .iter()
+            .flat_map(|column| column.tasks.clone())
+            .collect();
+        let yesterday_tasks: Vec<Task> = board
+            .iter()
+            .find(|group| group.project == yesterday_project)
+            .map(|group| {
+                group
+                    .columns
+                    .iter()
+                    .flat_map(|column| column.tasks.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        assert_eq!(moved_task.project, today_project);
+        assert_eq!(moved_task.column_id, today_column_id);
+        assert_eq!(
+            moved_task.scheduled_start_at.as_deref(),
+            Some(expected_start_at.as_str())
+        );
+        assert_eq!(
+            moved_task.scheduled_end_at.as_deref(),
+            Some(expected_end_at.as_str())
+        );
+        assert!(today_tasks.iter().any(|item| item.id == task.id));
+        assert!(!yesterday_tasks.iter().any(|item| item.id == task.id));
         let _ = std::fs::remove_file(path);
     }
 

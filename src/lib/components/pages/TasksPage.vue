@@ -265,6 +265,20 @@ function parseTaskDate(value: string) {
   return new Date(year, month - 1, day, hour, minute)
 }
 
+function formatTaskDateTime(date: Date): string {
+  return `${formatDateKey(date)}T${padDatePart(date.getHours())}:${padDatePart(date.getMinutes())}:${padDatePart(date.getSeconds())}`
+}
+
+function rescheduleLocalTaskForProject(task: Task, project: string) {
+  if (!task.scheduled_start_at || !isDateProject(project) || formatDateKey(parseTaskDate(task.scheduled_start_at)) === project) return
+  const [year, month, day] = project.split('-').map(Number)
+  const start = parseTaskDate(task.scheduled_start_at)
+  const nextStart = new Date(year, month - 1, day, start.getHours(), start.getMinutes(), start.getSeconds())
+  const duration = task.scheduled_end_at ? parseTaskDate(task.scheduled_end_at).getTime() - start.getTime() : null
+  task.scheduled_start_at = formatTaskDateTime(nextStart)
+  task.scheduled_end_at = duration === null ? null : formatTaskDateTime(new Date(nextStart.getTime() + duration))
+}
+
 function formatTaskScheduleTime(task: Task): string {
   if (!task.scheduled_start_at) return ''
   const start = parseTaskDate(task.scheduled_start_at)
@@ -548,6 +562,7 @@ function moveLocalTask(task: Task, columnId: string, position: number) {
     }
   }
   movingTask.project = targetColumn.project
+  rescheduleLocalTaskForProject(movingTask, targetColumn.project)
   movingTask.column_id = columnId
   movingTask.position = position
   movingTask.updated_at = new Date().toISOString()
