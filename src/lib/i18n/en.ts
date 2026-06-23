@@ -15,9 +15,10 @@ export const en = {
   dashboard: {
     title: "Dashboard",
     welcome: "Welcome back",
-    recentTasks: "Recent Tasks",
+    recentTasks: "Next Tasks",
     recentNotes: "Recent Notes",
     pendingTasks: "Pending Tasks",
+    noProcessingTasks: "No tasks to handle",
     completed: "completed",
     memos: "memos",
     upcoming: "Upcoming",

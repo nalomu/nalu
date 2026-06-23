@@ -18,9 +18,10 @@ export const zh = {
   dashboard: {
     title: "仪表盘",
     welcome: "欢迎回来",
-    recentTasks: "最近任务",
+    recentTasks: "最近要处理",
     recentNotes: "最近笔记",
     pendingTasks: "待办任务",
+    noProcessingTasks: "暂无待处理任务",
     completed: "已完成",
     memos: "备忘录",
     upcoming: "即将到来",
