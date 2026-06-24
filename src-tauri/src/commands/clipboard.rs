@@ -3,8 +3,6 @@ use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 #[cfg(not(target_os = "android"))]
 use std::borrow::Cow;
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
 #[cfg(target_os = "macos")]
 use std::process::{Command, Output};
 #[cfg(target_os = "macos")]
@@ -73,20 +71,23 @@ pub fn add_clipboard_entry(
     } else {
         content_type
     };
+    let content_hash = content_hash_for_entry(&content, &content_type);
 
     // De-duplicate:
     // - text/file/image_file/unknown: same content + same normalized type
     // - image bitmap: same file/data bytes, because new screenshot captures may have different UUID paths
-    if let Some(mut existing) = find_duplicate_entry(conn, &content, &content_type)? {
+    if let Some(mut existing) =
+        find_duplicate_entry(conn, &content, &content_type, content_hash.as_deref())?
+    {
         conn.execute(
-            "UPDATE clipboard_history SET created_at = ?1 WHERE id = ?2",
-            rusqlite::params![created_at, existing.id],
+            "UPDATE clipboard_history SET created_at = ?1, content_hash = COALESCE(content_hash, ?2) WHERE id = ?3",
+            rusqlite::params![created_at, content_hash, existing.id],
         )
         .map_err(|e| e.to_string())?;
 
         // If the new image was just saved as a duplicate UUID file, remove it to avoid orphan files.
         if is_bitmap_image_type(&content_type) && existing.content != content {
-            cleanup_duplicate_image_file(&content);
+            cleanup_stored_image_file(&content);
         }
 
         existing.created_at = created_at;
@@ -103,8 +104,8 @@ pub fn add_clipboard_entry(
     let id = uuid::Uuid::new_v4().to_string();
 
     conn.execute(
-        "INSERT INTO clipboard_history (id, content, content_type, created_at) VALUES (?1, ?2, ?3, ?4)",
-        rusqlite::params![id, content, content_type, created_at],
+        "INSERT INTO clipboard_history (id, content, content_type, content_hash, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+        rusqlite::params![id, content, content_type, content_hash, created_at],
     )
     .map_err(|e| e.to_string())?;
 
@@ -120,11 +121,23 @@ pub fn add_clipboard_entry(
 pub fn delete_clipboard_entry(id: String) -> Result<(), String> {
     let db = get_connection()?;
     let conn = db.as_ref().unwrap();
+    let deleted_image = conn
+        .query_row(
+            "SELECT content FROM clipboard_history
+             WHERE id = ?1 AND (lower(content_type) = 'image' OR lower(content_type) LIKE 'image/%')",
+            rusqlite::params![id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
     conn.execute(
         "DELETE FROM clipboard_history WHERE id = ?1",
         rusqlite::params![id],
     )
     .map_err(|e| e.to_string())?;
+    if let Some(content) = deleted_image {
+        cleanup_stored_image_file(&content);
+    }
     Ok(())
 }
 
@@ -148,19 +161,15 @@ pub fn get_clipboard_entry(id: String) -> Result<ClipboardEntry, String> {
 }
 
 #[tauri::command]
-pub fn clear_clipboard_history() -> Result<usize, String> {
+pub fn clear_clipboard_history(app: tauri::AppHandle) -> Result<usize, String> {
     let db = get_connection()?;
     let conn = db.as_ref().unwrap();
 
-    // Optional cleanup: remove stored image files before clearing the table.
-    if let Ok(entries) = get_all_image_entries(conn) {
-        for entry in entries {
-            cleanup_duplicate_image_file(&entry.content);
-        }
-    }
-
-    conn.execute("DELETE FROM clipboard_history", [])
-        .map_err(|e| e.to_string())
+    let deleted = conn
+        .execute("DELETE FROM clipboard_history", [])
+        .map_err(|e| e.to_string())?;
+    cleanup_clipboard_image_dir(&app);
+    Ok(deleted)
 }
 
 #[tauri::command]
@@ -286,9 +295,10 @@ pub fn save_clipboard_image_data_url(
 
     // If the same image is already in history, return its existing path.
     // add_clipboard_entry will then update created_at and move it to the top.
+    let content_hash = image_bytes_hash(&bytes);
     if let Ok(db) = get_connection()
         && let Some(conn) = db.as_ref()
-        && let Some(existing) = find_duplicate_image_entry_by_hash(conn, hash_bytes(&bytes))?
+        && let Some(existing) = find_duplicate_image_entry_by_hash(conn, &content_hash)?
     {
         tracing::info!(
             "[clipboard] duplicate image save skipped, reuse existing path: id={}, path={}",
@@ -418,11 +428,15 @@ fn find_duplicate_entry(
     conn: &Connection,
     content: &str,
     content_type: &str,
+    content_hash: Option<&str>,
 ) -> Result<Option<ClipboardEntry>, String> {
     let normalized_type = normalize_content_type(content_type);
 
     if is_bitmap_image_type(&normalized_type) {
-        return find_duplicate_image_entry(conn, content);
+        return match content_hash {
+            Some(hash) => find_duplicate_image_entry_by_hash(conn, hash),
+            None => find_duplicate_image_entry_by_exact_content(conn, content),
+        };
     }
 
     conn.query_row(
@@ -438,71 +452,39 @@ fn find_duplicate_entry(
     .map_err(|e| e.to_string())
 }
 
-fn find_duplicate_image_entry(
+fn find_duplicate_image_entry_by_exact_content(
     conn: &Connection,
     content: &str,
 ) -> Result<Option<ClipboardEntry>, String> {
-    let target_hash = match image_content_hash(content) {
-        Ok(hash) => hash,
-        Err(err) => {
-            tracing::warn!("[clipboard] image duplicate hash failed, fallback exact match: {err}");
-            return conn.query_row(
-                "SELECT id, content, content_type, created_at
-                 FROM clipboard_history
-                 WHERE content = ?1 AND (lower(content_type) = 'image' OR lower(content_type) LIKE 'image/%')
-                 ORDER BY created_at DESC
-                 LIMIT 1",
-                rusqlite::params![content],
-                row_to_clipboard_entry,
-            )
-            .optional()
-            .map_err(|e| e.to_string());
-        }
-    };
-
-    find_duplicate_image_entry_by_hash(conn, target_hash)
+    conn.query_row(
+        "SELECT id, content, content_type, created_at
+         FROM clipboard_history
+         WHERE content = ?1 AND (lower(content_type) = 'image' OR lower(content_type) LIKE 'image/%')
+         ORDER BY created_at DESC
+         LIMIT 1",
+        rusqlite::params![content],
+        row_to_clipboard_entry,
+    )
+    .optional()
+    .map_err(|e| e.to_string())
 }
 
 fn find_duplicate_image_entry_by_hash(
     conn: &Connection,
-    target_hash: u64,
+    target_hash: &str,
 ) -> Result<Option<ClipboardEntry>, String> {
-    let entries = get_all_image_entries(conn)?;
-
-    for entry in entries {
-        match image_content_hash(&entry.content) {
-            Ok(hash) if hash == target_hash => return Ok(Some(entry)),
-            Ok(_) => {}
-            Err(err) => {
-                tracing::warn!(
-                    "[clipboard] skip image duplicate candidate: id={}, err={}",
-                    entry.id,
-                    err
-                );
-            }
-        }
-    }
-
-    Ok(None)
-}
-
-fn get_all_image_entries(conn: &Connection) -> Result<Vec<ClipboardEntry>, String> {
-    let mut stmt = conn
-        .prepare(
-            "SELECT id, content, content_type, created_at
-             FROM clipboard_history
-             WHERE lower(content_type) = 'image' OR lower(content_type) LIKE 'image/%'
-             ORDER BY created_at DESC",
-        )
-        .map_err(|e| e.to_string())?;
-
-    let entries = stmt
-        .query_map([], row_to_clipboard_entry)
-        .map_err(|e| e.to_string())?
-        .filter_map(|r| r.ok())
-        .collect();
-
-    Ok(entries)
+    conn.query_row(
+        "SELECT id, content, content_type, created_at
+         FROM clipboard_history
+         WHERE content_hash = ?1
+            AND (lower(content_type) = 'image' OR lower(content_type) LIKE 'image/%')
+         ORDER BY created_at DESC
+         LIMIT 1",
+        rusqlite::params![target_hash],
+        row_to_clipboard_entry,
+    )
+    .optional()
+    .map_err(|e| e.to_string())
 }
 
 fn row_to_clipboard_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<ClipboardEntry> {
@@ -514,15 +496,27 @@ fn row_to_clipboard_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<Clipboard
     })
 }
 
-fn image_content_hash(content: &str) -> Result<u64, String> {
-    let bytes = read_image_bytes_from_content(content)?;
-    Ok(hash_bytes(&bytes))
+fn content_hash_for_entry(content: &str, content_type: &str) -> Option<String> {
+    if !is_bitmap_image_type(content_type) {
+        return None;
+    }
+
+    match read_image_bytes_from_content(content) {
+        Ok(bytes) => Some(image_bytes_hash(&bytes)),
+        Err(err) => {
+            tracing::warn!("[clipboard] image content hash failed: {err}");
+            None
+        }
+    }
 }
 
-fn hash_bytes(bytes: &[u8]) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    bytes.hash(&mut hasher);
-    hasher.finish()
+fn image_bytes_hash(bytes: &[u8]) -> String {
+    let mut hash = 0xcbf29ce484222325u64;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    format!("{hash:016x}")
 }
 
 fn normalize_content_type(content_type: &str) -> String {
@@ -716,7 +710,7 @@ fn path_has_image_extension(path: &str) -> bool {
     )
 }
 
-fn cleanup_duplicate_image_file(content: &str) {
+fn cleanup_stored_image_file(content: &str) {
     let path = content.trim().trim_start_matches("file://");
 
     // Safety guard: only remove files from our clipboard image cache.
@@ -725,12 +719,37 @@ fn cleanup_duplicate_image_file(content: &str) {
     }
 
     match std::fs::remove_file(path) {
-        Ok(_) => tracing::info!("[clipboard] duplicate image file removed: {}", path),
+        Ok(_) => tracing::info!("[clipboard] stored image file removed: {}", path),
         Err(e) => tracing::warn!(
-            "[clipboard] duplicate image file remove failed: path={}, err={}",
+            "[clipboard] stored image file remove failed: path={}, err={}",
             path,
             e
         ),
+    }
+}
+
+fn cleanup_clipboard_image_dir(app: &tauri::AppHandle) {
+    let Ok(app_dir) = app.path().app_data_dir() else {
+        return;
+    };
+    let image_dir = app_dir.join("clipboard-images");
+    if !image_dir.exists() {
+        return;
+    }
+    if let Err(err) = std::fs::remove_dir_all(&image_dir) {
+        tracing::warn!(
+            "[clipboard] clipboard image dir cleanup failed: path={}, err={}",
+            image_dir.display(),
+            err
+        );
+        return;
+    }
+    if let Err(err) = std::fs::create_dir_all(&image_dir) {
+        tracing::warn!(
+            "[clipboard] clipboard image dir recreate failed: path={}, err={}",
+            image_dir.display(),
+            err
+        );
     }
 }
 
@@ -792,12 +811,33 @@ fn decode_base64(value: &str) -> Result<Vec<u8>, String> {
 
 #[tauri::command]
 pub fn cleanup_clipboard(
+    app: tauri::AppHandle,
     mode: String,
     days: Option<i64>,
     count: Option<i64>,
 ) -> Result<usize, String> {
     let db = get_connection()?;
     let conn = db.as_ref().unwrap();
+
+    let deleted_images = match mode.as_str() {
+        "time" => {
+            let days = days.unwrap_or(7).max(1);
+            collect_image_contents_for_where(
+                conn,
+                "created_at < datetime('now', ?1)",
+                rusqlite::params![format!("-{} days", days)],
+            )?
+        }
+        "count" => {
+            let max_count = count.unwrap_or(200).max(10);
+            collect_image_contents_for_where(
+                conn,
+                "id NOT IN (SELECT id FROM clipboard_history ORDER BY created_at DESC LIMIT ?1)",
+                rusqlite::params![max_count],
+            )?
+        }
+        _ => Vec::new(),
+    };
 
     let deleted = match mode.as_str() {
         "time" => {
@@ -826,5 +866,63 @@ pub fn cleanup_clipboard(
         );
     }
 
+    for content in deleted_images {
+        cleanup_stored_image_file(&content);
+    }
+    cleanup_unreferenced_clipboard_images(&app, conn);
+
     Ok(deleted)
+}
+
+fn collect_image_contents_for_where<P>(
+    conn: &Connection,
+    where_clause: &str,
+    params: P,
+) -> Result<Vec<String>, String>
+where
+    P: rusqlite::Params,
+{
+    let sql = format!(
+        "SELECT content FROM clipboard_history
+         WHERE ({where_clause})
+           AND (lower(content_type) = 'image' OR lower(content_type) LIKE 'image/%')"
+    );
+    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+    let contents = stmt
+        .query_map(params, |row| row.get(0))
+        .map_err(|e| e.to_string())?
+        .filter_map(|r| r.ok())
+        .collect();
+    Ok(contents)
+}
+
+fn cleanup_unreferenced_clipboard_images(app: &tauri::AppHandle, conn: &Connection) {
+    let Ok(app_dir) = app.path().app_data_dir() else {
+        return;
+    };
+    let image_dir = app_dir.join("clipboard-images");
+    let Ok(files) = std::fs::read_dir(&image_dir) else {
+        return;
+    };
+
+    for file in files.filter_map(|entry| entry.ok()) {
+        let path = file.path();
+        if !path.is_file() {
+            continue;
+        }
+        let path_text = path.to_string_lossy().to_string();
+        let referenced = conn
+            .query_row(
+                "SELECT 1 FROM clipboard_history WHERE content = ?1 OR content = ?2 LIMIT 1",
+                rusqlite::params![path_text, format!("file://{path_text}")],
+                |_| Ok(()),
+            )
+            .optional()
+            .ok()
+            .flatten()
+            .is_some();
+        if !referenced {
+            cleanup_stored_image_file(&path_text);
+        }
+    }
 }

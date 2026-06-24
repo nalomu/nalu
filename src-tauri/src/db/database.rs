@@ -35,6 +35,7 @@ pub fn init(path: &std::path::Path) -> Result<(), String> {
             id TEXT PRIMARY KEY,
             content TEXT NOT NULL,
             content_type TEXT NOT NULL DEFAULT 'text',
+            content_hash TEXT,
             created_at TEXT NOT NULL DEFAULT (datetime('now'))
         );
 
@@ -86,6 +87,7 @@ pub fn init(path: &std::path::Path) -> Result<(), String> {
     // Run kanban board migration
     migrate_kanban_schema(&conn)?;
     migrate_task_schedule_schema(&conn)?;
+    migrate_clipboard_schema(&conn)?;
 
     // Run alarm migrations
     migrate_alarm_skip_next(&conn)?;
@@ -93,6 +95,26 @@ pub fn init(path: &std::path::Path) -> Result<(), String> {
 
     let mut db = DB.lock().map_err(|e| e.to_string())?;
     *db = Some(conn);
+    Ok(())
+}
+
+/// Idempotent migration for clipboard performance metadata.
+fn migrate_clipboard_schema(conn: &Connection) -> Result<(), String> {
+    if conn
+        .prepare("SELECT content_hash FROM clipboard_history LIMIT 1")
+        .is_err()
+    {
+        conn.execute_batch("ALTER TABLE clipboard_history ADD COLUMN content_hash TEXT;")
+            .map_err(|e| e.to_string())?;
+    }
+
+    conn.execute_batch(
+        "CREATE INDEX IF NOT EXISTS idx_clipboard_history_content_hash
+            ON clipboard_history (content_hash)
+            WHERE content_hash IS NOT NULL;",
+    )
+    .map_err(|e| e.to_string())?;
+
     Ok(())
 }
 
