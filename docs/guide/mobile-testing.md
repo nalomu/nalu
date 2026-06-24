@@ -35,7 +35,11 @@ adb devices
 adb install -r mobile/android/app/build/outputs/apk/debug/app-debug.apk
 ```
 
-`src-tauri/gen/android` 仅为 Tauri Mobile legacy 生成工程，不作为正式移动端测试入口。
+查看 Android 运行日志：
+
+```bash
+adb logcat | rg "nalu|tauri|chromium|AndroidRuntime"
+```
 
 ## 浏览器响应式预览
 
@@ -46,40 +50,6 @@ pnpm dev
 ```
 
 在浏览器 DevTools 中切换手机尺寸，适合快速检查首页、设置页、闹钟页和番茄钟页的响应式布局。
-
-## Tauri Android legacy 真机 APK
-
-以下流程只用于旧 Tauri Mobile 工程排查。它会把开发版安装到已连接设备，并连接本机 Vite：
-
-```bash
-adb devices
-pnpm tauri:dev:android:legacy
-```
-
-查看 Android 运行日志：
-
-```bash
-adb logcat | rg "nalu|tauri|chromium|AndroidRuntime"
-```
-
-需要接近安装包环境时，再构建 debug APK：
-
-```bash
-pnpm tauri android build --debug --apk
-```
-
-构建产物：
-
-```text
-src-tauri/gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk
-```
-
-安装到手机：
-
-```bash
-adb devices
-adb install -r src-tauri/gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk
-```
 
 ## 手机端重点检查
 

@@ -40,4 +40,4 @@ Rust 后端负责本地数据库、后台计时器、文件复制、系统能力
 - 开机自启
 - macOS 辅助功能粘贴
 
-移动端需要降级或隐藏这些能力。后端使用 `#[cfg(desktop)]`、`#[cfg(target_os = "macos")]` 和 `#[cfg(target_os = "android")]` 做条件编译。
+移动端需要降级或隐藏这些能力。后端使用 `#[cfg(desktop)]`、`#[cfg(target_os = "macos")]` 做条件编译。

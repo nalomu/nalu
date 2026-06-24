@@ -1,7 +1,6 @@
 use crate::db::database::get_connection;
 use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
-#[cfg(not(target_os = "android"))]
 use std::borrow::Cow;
 #[cfg(target_os = "macos")]
 use std::process::{Command, Output};
@@ -359,7 +358,6 @@ pub fn write_clipboard_entry_to_system(
     }
 }
 
-#[cfg(not(target_os = "android"))]
 fn write_text_to_clipboard(text: &str) -> Result<(), String> {
     let mut clipboard =
         arboard::Clipboard::new().map_err(|e| format!("clipboard init failed: {e}"))?;
@@ -375,12 +373,6 @@ fn write_text_to_clipboard(text: &str) -> Result<(), String> {
     Ok(())
 }
 
-#[cfg(target_os = "android")]
-fn write_text_to_clipboard(_text: &str) -> Result<(), String> {
-    Err("system clipboard write is not supported on Android yet".to_string())
-}
-
-#[cfg(not(target_os = "android"))]
 fn write_image_content_to_clipboard(content: &str) -> Result<(), String> {
     let bytes = read_image_bytes_from_content(content)?;
     let image = image::load_from_memory(&bytes)
@@ -417,11 +409,6 @@ fn write_image_content_to_clipboard(content: &str) -> Result<(), String> {
     );
 
     Ok(())
-}
-
-#[cfg(target_os = "android")]
-fn write_image_content_to_clipboard(_content: &str) -> Result<(), String> {
-    Err("system clipboard image write is not supported on Android yet".to_string())
 }
 
 fn find_duplicate_entry(

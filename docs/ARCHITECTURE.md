@@ -118,8 +118,7 @@ Desktop Rust Core 是桌面端实现细节，不作为 Android/iOS 的共享后�
 | 同步客户端 | Kotlin 实现 | 按 `shared/contracts/` 契约收发 HTTP changelog 同步消息 |
 | 系统能力 | Android 原生 API | 通知、分享入口、快捷入口、后台策略、权限生命周期 |
 
-正式 Android 工程位于 `mobile/android/`。`src-tauri/gen/android` 是 Tauri Mobile 生成目录，
-仅保留作 legacy/实验调试参考，不作为 Nalu Mobile 的正式主线。
+正式 Android 工程位于 `mobile/android/`。
 Android v1 的日程写入任务表的计划时间字段，旧 `schedules` 表仅保留兼容历史数据。
 
 ### iOS Client（暂搁置）

@@ -37,17 +37,12 @@ static MAIN_ORDERED_OUT_FOR_POPUP: Mutex<bool> = Mutex::new(false);
 
 #[tauri::command]
 fn runtime_platform() -> &'static str {
-    #[cfg(target_os = "android")]
-    {
-        "android"
-    }
-
     #[cfg(target_os = "ios")]
     {
         "ios"
     }
 
-    #[cfg(all(desktop, not(any(target_os = "android", target_os = "ios"))))]
+    #[cfg(all(desktop, not(target_os = "ios")))]
     {
         "desktop"
     }

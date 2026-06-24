@@ -7,7 +7,7 @@
 - Rust stable
 - Tauri 2 所需系统依赖
 
-Android 构建还需要 Android SDK、NDK、cmdline-tools 和 Rust Android targets，见 [Android 构建](../operations/android-build.md)。
+Android 构建还需要 Android SDK、NDK、cmdline-tools，见 [Android 构建](../operations/android-build.md)。
 
 ## 安装依赖
 

@@ -149,8 +149,7 @@ nalomu-uni-platform/
 ```
 
 移动端正式工程放在 `mobile/android/`，使用 Kotlin / Jetpack Compose / Room 原生实现。
-`src-tauri/gen/android` 是 Tauri Mobile legacy 生成目录，不作为正式 Android 主线。iOS 在
-`mobile/ios/` 预留 Swift / SwiftUI 方向。移动端与桌面端共享协议、数据模型、同步规则、
+iOS 在 `mobile/ios/` 预留 Swift / SwiftUI 方向。移动端与桌面端共享协议、数据模型、同步规则、
 错误码和设计 token，不共享 Vue UI、Tauri IPC 或桌面端 Rust Core。
 
 ---
@@ -210,7 +209,6 @@ tauri-build = { version = "2", features = [] }
     "docs:dev": "vuepress dev docs",
     "docs:build": "vuepress build docs",
     "tauri:dev": "tauri dev",
-    "tauri:dev:android:legacy": "tauri android dev",
     "tauri:build": "tauri build"
   },
   "dependencies": {

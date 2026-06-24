@@ -31,7 +31,7 @@ du -sh ~/.gradle ~/.android /Volumes/NALOMU_MAC/Android/sdk /Volumes/NALOMU_MAC/
 迁移前需要停止 Gradle/Kotlin daemon：
 
 ```bash
-src-tauri/gen/android/gradlew --project-dir src-tauri/gen/android --stop
+cd mobile/android && ./gradlew --stop
 ```
 
 ## 验证
@@ -39,7 +39,7 @@ src-tauri/gen/android/gradlew --project-dir src-tauri/gen/android --stop
 ```bash
 ls -ld ~/.gradle
 du -sh ~/.gradle /Volumes/NALOMU_MAC/Android/gradle-home
-src-tauri/gen/android/gradlew --project-dir src-tauri/gen/android --version
+cd mobile/android && ./gradlew --version
 ```
 
 ## 风险
