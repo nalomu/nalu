@@ -22,6 +22,10 @@ export const zh = {
     recentNotes: "最近笔记",
     pendingTasks: "待办任务",
     noProcessingTasks: "暂无待处理任务",
+    editLayout: "编辑布局",
+    doneLayout: "完成",
+    resetLayout: "恢复默认",
+    moveWidget: "移动区域",
     completed: "已完成",
     memos: "备忘录",
     upcoming: "即将到来",
@@ -393,6 +397,7 @@ export const zh = {
   dashboardExt: {
     quickNav: "快捷导航",
     quickControls: "快捷控制",
+    stats: "数据统计",
     allSettings: "全部设置",
     soundControlDesc: "快速调整闹钟和番茄钟的提示音量",
     toggleDone: "标记完成",

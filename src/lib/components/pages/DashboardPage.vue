@@ -4,7 +4,7 @@ import { storeToRefs } from 'pinia'
 import { useRouter } from 'vue-router'
 import { invoke } from '@tauri-apps/api/core'
 import { writeText } from '@tauri-apps/plugin-clipboard-manager'
-import { CheckSquare, FileText, Calendar, Scissors, Timer, Database, AlarmClock, Settings, Circle, Radio, Copy, Type, Image as ImageIcon, Sparkles, Play, Pause, Bell, BellOff, Clock, ChevronRight, Volume2 } from 'lucide-vue-next'
+import { CheckSquare, FileText, Calendar, Scissors, Timer, Database, AlarmClock, Settings, Circle, Radio, Copy, Type, Image as ImageIcon, Sparkles, Play, Pause, Bell, BellOff, Clock, ChevronRight, Volume2, GripHorizontal } from 'lucide-vue-next'
 import type { Task, Note, ClipboardEntry, Alarm, PomodoroState } from '$lib/types'
 import { useClipboardStore } from '$lib/stores/clipboardStore'
 import { useSettingsStore } from '$lib/stores/settingsStore'
@@ -34,8 +34,212 @@ const pendingTasks = computed(() => tasks.value.filter((task) => !task.done))
 const doneTasks = computed(() => tasks.value.filter((task) => task.done))
 const animatedPendingCount = ref(0)
 const soundVolumePercent = computed(() => Math.round(soundSettings.value.volume * 100))
+const DASHBOARD_WIDGET_ORDER_KEY = 'nalu-dashboard-widget-order-v1'
+const DEFAULT_DASHBOARD_WIDGET_ORDER = [
+  'quickControls',
+  'quickNav',
+  'focusAndNext',
+  'alarms',
+  'stats',
+  'clipboard',
+  'nextTasks',
+  'recentNotes',
+  'aiWidget',
+] as const
+type DashboardWidgetId = (typeof DEFAULT_DASHBOARD_WIDGET_ORDER)[number]
+type DashboardWidgetDefinition = {
+  id: DashboardWidgetId
+  titleKey: string
+  desktopOnly?: boolean
+}
+const dashboardWidgets: DashboardWidgetDefinition[] = [
+  { id: 'quickControls', titleKey: 'dashboardExt.quickControls' },
+  { id: 'quickNav', titleKey: 'dashboardExt.quickNav' },
+  { id: 'focusAndNext', titleKey: 'dashboard.upcoming', desktopOnly: true },
+  { id: 'alarms', titleKey: 'nav.alarm', desktopOnly: true },
+  { id: 'stats', titleKey: 'dashboardExt.stats' },
+  { id: 'clipboard', titleKey: 'dashboardExt.clipboardStatus', desktopOnly: true },
+  { id: 'nextTasks', titleKey: 'dashboard.recentTasks' },
+  { id: 'recentNotes', titleKey: 'dashboard.recentNotes' },
+  { id: 'aiWidget', titleKey: 'nav.ai' },
+]
+const dashboardWidgetIds = new Set<DashboardWidgetId>(DEFAULT_DASHBOARD_WIDGET_ORDER)
+const dashboardLayoutEditing = ref(false)
+const widgetOrder = ref<DashboardWidgetId[]>(loadDashboardWidgetOrder())
+const draggedWidgetId = ref<DashboardWidgetId | null>(null)
+const widgetDropTarget = ref<{ id: DashboardWidgetId; position: 'before' | 'after' } | null>(null)
+const widgetDrag = ref<{
+  widgetId: DashboardWidgetId
+  pointerId: number
+  startX: number
+  startY: number
+  active: boolean
+} | null>(null)
 let interval: ReturnType<typeof setInterval>
 let countTimer: ReturnType<typeof setInterval> | null = null
+
+function isDashboardWidgetId(value: unknown): value is DashboardWidgetId {
+  return typeof value === 'string' && dashboardWidgetIds.has(value as DashboardWidgetId)
+}
+
+function normalizeDashboardWidgetOrder(value: unknown): DashboardWidgetId[] {
+  const incoming = Array.isArray(value) ? value.filter(isDashboardWidgetId) : []
+  const seen = new Set<DashboardWidgetId>()
+  const normalized = incoming.filter((id) => {
+    if (seen.has(id)) return false
+    seen.add(id)
+    return true
+  })
+  for (const id of DEFAULT_DASHBOARD_WIDGET_ORDER) {
+    if (!seen.has(id)) normalized.push(id)
+  }
+  return normalized
+}
+
+function loadDashboardWidgetOrder(): DashboardWidgetId[] {
+  try {
+    const saved = localStorage.getItem(DASHBOARD_WIDGET_ORDER_KEY)
+    return normalizeDashboardWidgetOrder(saved ? JSON.parse(saved) : null)
+  } catch {
+    return [...DEFAULT_DASHBOARD_WIDGET_ORDER]
+  }
+}
+
+function saveDashboardWidgetOrder(order = widgetOrder.value) {
+  try {
+    localStorage.setItem(DASHBOARD_WIDGET_ORDER_KEY, JSON.stringify(order))
+  } catch {}
+}
+
+function resetDashboardWidgetOrder() {
+  widgetOrder.value = [...DEFAULT_DASHBOARD_WIDGET_ORDER]
+  try {
+    localStorage.removeItem(DASHBOARD_WIDGET_ORDER_KEY)
+  } catch {}
+}
+
+function widgetDefinition(id: DashboardWidgetId) {
+  return dashboardWidgets.find((widget) => widget.id === id)
+}
+
+function isWidgetVisible(widget: DashboardWidgetDefinition) {
+  return !widget.desktopOnly || !isMobile.value
+}
+
+const visibleDashboardWidgets = computed(() =>
+  widgetOrder.value
+    .map((id) => widgetDefinition(id))
+    .filter((widget): widget is DashboardWidgetDefinition => widget !== undefined && isWidgetVisible(widget)),
+)
+
+function moveDashboardWidget(sourceId: DashboardWidgetId, targetId: DashboardWidgetId, position: 'before' | 'after') {
+  if (sourceId === targetId) return
+  const visibleIds = visibleDashboardWidgets.value.map((widget) => widget.id)
+  const fromIndex = visibleIds.indexOf(sourceId)
+  const targetIndex = visibleIds.indexOf(targetId)
+  if (fromIndex === -1 || targetIndex === -1) return
+
+  const [moved] = visibleIds.splice(fromIndex, 1)
+  const adjustedTargetIndex = visibleIds.indexOf(targetId)
+  visibleIds.splice(adjustedTargetIndex + (position === 'after' ? 1 : 0), 0, moved)
+
+  const visibleSet = new Set(visibleIds)
+  const reorderedVisible = [...visibleIds]
+  widgetOrder.value = widgetOrder.value.map((id) => (visibleSet.has(id) ? reorderedVisible.shift() ?? id : id))
+  saveDashboardWidgetOrder()
+}
+
+function clearWidgetDropTarget() {
+  widgetDropTarget.value = null
+}
+
+function setWidgetDropTargetFromPoint(x: number, y: number) {
+  const drag = widgetDrag.value
+  if (!drag) return
+  const element = document.elementFromPoint(x, y) as HTMLElement | null
+  const target = element?.closest<HTMLElement>('[data-dashboard-widget]')
+  const targetId = target?.dataset.dashboardWidget
+  if (!target || !isDashboardWidgetId(targetId) || targetId === drag.widgetId) {
+    clearWidgetDropTarget()
+    return
+  }
+  const rect = target.getBoundingClientRect()
+  widgetDropTarget.value = {
+    id: targetId,
+    position: y > rect.top + rect.height / 2 ? 'after' : 'before',
+  }
+}
+
+function stopWidgetDrag() {
+  window.removeEventListener('pointermove', onWidgetPointerMove)
+  window.removeEventListener('pointerup', onWidgetPointerUp)
+  window.removeEventListener('pointercancel', onWidgetPointerCancel)
+  document.body.style.userSelect = ''
+  widgetDrag.value = null
+}
+
+function onWidgetPointerDown(event: PointerEvent, widgetId: DashboardWidgetId) {
+  if (!dashboardLayoutEditing.value || event.button !== 0) return
+  event.preventDefault()
+  event.stopPropagation()
+  document.body.style.userSelect = 'none'
+  widgetDrag.value = {
+    widgetId,
+    pointerId: event.pointerId,
+    startX: event.clientX,
+    startY: event.clientY,
+    active: false,
+  }
+  window.addEventListener('pointermove', onWidgetPointerMove)
+  window.addEventListener('pointerup', onWidgetPointerUp)
+  window.addEventListener('pointercancel', onWidgetPointerCancel)
+}
+
+function onWidgetPointerMove(event: PointerEvent) {
+  const drag = widgetDrag.value
+  if (!drag || drag.pointerId !== event.pointerId) return
+  const distance = Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY)
+  if (!drag.active) {
+    if (distance < 6) return
+    drag.active = true
+    draggedWidgetId.value = drag.widgetId
+    vibrate(12)
+  }
+  event.preventDefault()
+  setWidgetDropTargetFromPoint(event.clientX, event.clientY)
+}
+
+function onWidgetPointerUp(event: PointerEvent) {
+  const drag = widgetDrag.value
+  if (!drag || drag.pointerId !== event.pointerId) return
+  const wasActive = drag.active
+  const sourceId = drag.widgetId
+  const target = widgetDropTarget.value
+  if (wasActive) event.preventDefault()
+  stopWidgetDrag()
+  draggedWidgetId.value = null
+  clearWidgetDropTarget()
+  if (wasActive && target) {
+    moveDashboardWidget(sourceId, target.id, target.position)
+  }
+}
+
+function onWidgetPointerCancel() {
+  stopWidgetDrag()
+  draggedWidgetId.value = null
+  clearWidgetDropTarget()
+}
+
+function toggleDashboardLayoutEditing() {
+  dashboardLayoutEditing.value = !dashboardLayoutEditing.value
+  if (!dashboardLayoutEditing.value) onWidgetPointerCancel()
+}
+
+function onDashboardWidgetClick(event: MouseEvent) {
+  if (!dashboardLayoutEditing.value) return
+  event.preventDefault()
+  event.stopPropagation()
+}
 
 function parseTime(value: string | null | undefined) {
   if (!value) return null
@@ -222,6 +426,7 @@ onMounted(async () => {
 onBeforeUnmount(() => clearInterval(interval))
 onBeforeUnmount(() => {
   if (countTimer) clearInterval(countTimer)
+  onWidgetPointerCancel()
 })
 useAiRefresh(loadData)
 
@@ -246,35 +451,82 @@ watch(() => pendingTasks.value.length, (next) => {
 
 <template>
   <div class="max-w-4xl mx-auto px-6 py-8">
-    <header class="mb-8">
-      <h1 class="text-2xl font-bold tracking-tight">{{ t('dashboard.title') }}</h1>
-      <div class="mt-1 flex items-center gap-1 text-sm text-muted-foreground">
-        <span>{{ t('dashboard.welcome') }},</span>
-        <input
-          v-if="editingDisplayName"
-          data-dashboard-display-name
-          class="h-7 w-32 rounded-md border bg-background px-2 text-sm font-medium text-foreground outline-none transition-[border-color,box-shadow] focus:border-primary focus:ring-2 focus:ring-primary/20"
-          :value="displayNameDraft"
-          maxlength="40"
-          aria-label="Display name"
-          @input="onDisplayNameInput"
-          @blur="stopDisplayNameEdit"
-          @keydown="onDisplayNameKeydown"
-        />
+    <header class="mb-8 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+      <div>
+        <h1 class="text-2xl font-bold tracking-tight">{{ t('dashboard.title') }}</h1>
+        <div class="mt-1 flex items-center gap-1 text-sm text-muted-foreground">
+          <span>{{ t('dashboard.welcome') }},</span>
+          <input
+            v-if="editingDisplayName"
+            data-dashboard-display-name
+            class="h-7 w-32 rounded-md border bg-background px-2 text-sm font-medium text-foreground outline-none transition-[border-color,box-shadow] focus:border-primary focus:ring-2 focus:ring-primary/20"
+            :value="displayNameDraft"
+            maxlength="40"
+            aria-label="Display name"
+            @input="onDisplayNameInput"
+            @blur="stopDisplayNameEdit"
+            @keydown="onDisplayNameKeydown"
+          />
+          <button
+            v-else
+            class="rounded-md px-1 font-medium text-foreground transition-colors hover:bg-secondary hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+            type="button"
+            :title="displayName"
+            @click="startDisplayNameEdit"
+          >
+            {{ displayName }}
+          </button>
+        </div>
+      </div>
+      <div class="flex items-center gap-2">
         <button
-          v-else
-          class="rounded-md px-1 font-medium text-foreground transition-colors hover:bg-secondary hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+          v-if="dashboardLayoutEditing"
           type="button"
-          :title="displayName"
-          @click="startDisplayNameEdit"
+          class="inline-flex h-9 items-center justify-center rounded-lg border px-3 text-sm text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+          @click="resetDashboardWidgetOrder"
         >
-          {{ displayName }}
+          {{ t('dashboard.resetLayout') }}
+        </button>
+        <button
+          type="button"
+          class="inline-flex h-9 items-center justify-center rounded-lg bg-primary px-3 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
+          @click="toggleDashboardLayoutEditing"
+        >
+          {{ dashboardLayoutEditing ? t('dashboard.doneLayout') : t('dashboard.editLayout') }}
         </button>
       </div>
     </header>
 
-    <!-- Quick controls -->
-    <section class="mb-8">
+    <TransitionGroup name="dashboard-widget" tag="div" data-dashboard-widget-list>
+      <div
+        v-for="widget in visibleDashboardWidgets"
+        :key="widget.id"
+        :data-dashboard-widget="widget.id"
+        class="relative mb-8 transition-all"
+        :class="{
+          'rounded-xl bg-primary/5 p-2 ring-1 ring-primary/30': dashboardLayoutEditing,
+          'opacity-45': draggedWidgetId === widget.id,
+        }"
+        @click.capture="onDashboardWidgetClick"
+      >
+        <div
+          v-if="widgetDropTarget?.id === widget.id && widgetDropTarget.position === 'before'"
+          class="mb-2 h-2 rounded-full bg-primary/50"
+        />
+        <div v-if="dashboardLayoutEditing" class="mb-2 flex items-center justify-between gap-3 rounded-lg border border-dashed border-primary/30 bg-background/80 px-3 py-2">
+          <span class="min-w-0 truncate text-xs font-medium text-muted-foreground">{{ t(widget.titleKey) }}</span>
+          <button
+            type="button"
+            class="inline-flex h-8 w-8 touch-none items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground active:cursor-grabbing"
+            :aria-label="`${t('dashboard.moveWidget')} ${t(widget.titleKey)}`"
+            @pointerdown="onWidgetPointerDown($event, widget.id)"
+          >
+            <GripHorizontal class="h-4 w-4" />
+          </button>
+        </div>
+
+        <!-- Quick controls -->
+        <section v-if="widget.id === 'quickControls'">
       <div class="mb-3 flex items-center justify-between gap-3">
         <h2 class="text-xs font-semibold text-muted-foreground uppercase tracking-wider">{{ t('dashboardExt.quickControls') }}</h2>
         <button class="inline-flex items-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-primary" @click="router.push('/settings')">
@@ -344,7 +596,7 @@ watch(() => pendingTasks.value.length, (next) => {
     </section>
 
     <!-- Quick nav -->
-    <section class="mb-8">
+    <section v-else-if="widget.id === 'quickNav'">
       <h2 class="text-xs font-semibold text-muted-foreground mb-3 uppercase tracking-wider">{{ t('dashboardExt.quickNav') }}</h2>
       <div class="grid grid-cols-3 sm:grid-cols-4 gap-2.5">
         <button v-for="[id, label, icon, color] in quickNav.filter(([id]) => isRouteEnabled(id))" :key="id" class="flex flex-col items-center gap-2 px-3 py-3.5 rounded-xl bg-card border cursor-pointer transition-all duration-200 hover:border-primary/40 hover:shadow-sm hover:-translate-y-0.5 active:translate-y-0 active:shadow-none" @click="router.push(`/${id}`)">
@@ -355,7 +607,7 @@ watch(() => pendingTasks.value.length, (next) => {
     </section>
 
     <!-- Time-critical row: Pomodoro + next tasks (desktop only pomodoro) -->
-    <section class="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
+    <section v-else-if="widget.id === 'focusAndNext'" class="grid grid-cols-1 sm:grid-cols-2 gap-4">
       <button
         v-if="!isMobile"
         class="text-left bg-card rounded-xl p-4 border hover:shadow-sm transition relative overflow-hidden"
@@ -423,7 +675,7 @@ watch(() => pendingTasks.value.length, (next) => {
     </section>
 
     <!-- Alarms row -->
-    <section v-if="!isMobile" class="mb-6">
+    <section v-else-if="widget.id === 'alarms' && !isMobile">
       <div class="flex justify-between items-center mb-3">
         <h2 class="text-xs font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-1.5">
           <AlarmClock class="w-3.5 h-3.5" />
@@ -454,7 +706,7 @@ watch(() => pendingTasks.value.length, (next) => {
     </section>
 
     <!-- Counts row -->
-    <div class="grid gap-4 mb-8" :class="isMobile ? 'grid-cols-2' : 'grid-cols-3'">
+    <div v-else-if="widget.id === 'stats'" class="grid gap-4" :class="isMobile ? 'grid-cols-2' : 'grid-cols-3'">
       <button class="text-left bg-card rounded-xl p-4 border hover:shadow-sm transition" @click="router.push('/tasks')">
         <div class="text-blue-500 text-xs font-medium mb-2">{{ t('nav.tasks') }}</div>
         <div class="text-3xl font-bold tabular-nums transition-transform duration-150" :key="animatedPendingCount">{{ animatedPendingCount }}</div>
@@ -471,7 +723,7 @@ watch(() => pendingTasks.value.length, (next) => {
     </div>
 
     <!-- Clipboard -->
-    <section v-if="!isMobile" class="mb-6">
+    <section v-else-if="widget.id === 'clipboard' && !isMobile">
       <div class="flex justify-between mb-3">
         <h2 class="text-xs font-semibold text-muted-foreground uppercase tracking-wider">{{ t('dashboardExt.clipboardStatus') }}</h2>
         <div class="flex items-center gap-3">
@@ -492,7 +744,7 @@ watch(() => pendingTasks.value.length, (next) => {
     </section>
 
     <!-- Tasks -->
-    <section class="mb-6">
+    <section v-else-if="widget.id === 'nextTasks'">
       <h2 class="text-xs font-semibold text-muted-foreground mb-3 uppercase tracking-wider">{{ t('dashboard.recentTasks') }}</h2>
       <TransitionGroup name="task-row" tag="div">
         <div v-for="task in nextProcessingTasks.slice(0, 5)" :key="task.id" class="flex items-center gap-3 px-3 py-2 rounded-xl bg-card border mb-1.5 transition-all duration-200">
@@ -520,7 +772,7 @@ watch(() => pendingTasks.value.length, (next) => {
     </section>
 
     <!-- Notes -->
-    <section class="mb-6">
+    <section v-else-if="widget.id === 'recentNotes'">
       <h2 class="text-xs font-semibold text-muted-foreground mb-3 uppercase tracking-wider">{{ t('dashboard.recentNotes') }}</h2>
       <div class="grid grid-cols-2 gap-2.5">
         <div v-for="note in notes.slice(0, 4)" :key="note.id" class="bg-card rounded-xl p-3 border">
@@ -529,7 +781,16 @@ watch(() => pendingTasks.value.length, (next) => {
         </div>
       </div>
     </section>
-    <AiChatWidget />
+
+        <section v-else-if="widget.id === 'aiWidget'">
+          <AiChatWidget />
+        </section>
+        <div
+          v-if="widgetDropTarget?.id === widget.id && widgetDropTarget.position === 'after'"
+          class="mt-2 h-2 rounded-full bg-primary/50"
+        />
+      </div>
+    </TransitionGroup>
   </div>
 </template>
 

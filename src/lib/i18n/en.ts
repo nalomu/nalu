@@ -19,6 +19,10 @@ export const en = {
     recentNotes: "Recent Notes",
     pendingTasks: "Pending Tasks",
     noProcessingTasks: "No tasks to handle",
+    editLayout: "Edit Layout",
+    doneLayout: "Done",
+    resetLayout: "Reset",
+    moveWidget: "Move section",
     completed: "completed",
     memos: "memos",
     upcoming: "Upcoming",
@@ -372,6 +376,7 @@ export const en = {
   dashboardExt: {
     quickNav: "Quick Navigation",
     quickControls: "Quick Controls",
+    stats: "Stats",
     allSettings: "All Settings",
     soundControlDesc: "Quickly adjust alert volume for alarms and Pomodoro",
     toggleDone: "Mark done",
