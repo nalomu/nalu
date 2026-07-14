@@ -1,6 +1,9 @@
 use serde::{Deserialize, Serialize};
+use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
+use tauri::{AppHandle, Emitter};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct MysqlConfig {
@@ -16,6 +19,62 @@ pub struct MysqlResult {
     pub columns: Vec<String>,
     pub rows: Vec<Vec<serde_json::Value>>,
     pub affected_rows: u64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MysqlTransferProgress {
+    pub operation_id: String,
+    pub kind: &'static str,
+    pub stage: &'static str,
+    pub processed_bytes: u64,
+    pub total_bytes: Option<u64>,
+    pub percent: Option<u8>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MysqlImportResult {
+    pub processed_bytes: u64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MysqlExportResult {
+    pub file_path: String,
+    pub processed_bytes: u64,
+}
+
+const MYSQL_TRANSFER_PROGRESS_EVENT: &str = "mysql-transfer-progress";
+const PROGRESS_EMIT_INTERVAL: Duration = Duration::from_millis(100);
+
+fn emit_transfer_progress(
+    app: &AppHandle,
+    operation_id: &str,
+    kind: &'static str,
+    stage: &'static str,
+    processed_bytes: u64,
+    total_bytes: Option<u64>,
+) {
+    let percent = total_bytes.map(|total| {
+        if total == 0 {
+            100
+        } else {
+            ((processed_bytes.saturating_mul(100) / total).min(100)) as u8
+        }
+    });
+
+    let _ = app.emit(
+        MYSQL_TRANSFER_PROGRESS_EVENT,
+        MysqlTransferProgress {
+            operation_id: operation_id.to_string(),
+            kind,
+            stage,
+            processed_bytes,
+            total_bytes,
+            percent,
+        },
+    );
 }
 
 #[tauri::command]
@@ -189,20 +248,26 @@ pub async fn mysql_list_databases(config: MysqlConfig) -> Result<Vec<String>, St
 
 #[tauri::command]
 pub async fn mysql_export(
+    app: AppHandle,
+    operation_id: String,
     config: MysqlConfig,
     export_dir: String,
     table: Option<String>,
-) -> Result<String, String> {
-    tokio::task::spawn_blocking(move || mysql_export_blocking(config, export_dir, table))
-        .await
-        .map_err(|e| format!("mysqldump task failed: {e}"))?
+) -> Result<MysqlExportResult, String> {
+    tokio::task::spawn_blocking(move || {
+        mysql_export_blocking(app, operation_id, config, export_dir, table)
+    })
+    .await
+    .map_err(|e| format!("mysqldump task failed: {e}"))?
 }
 
 fn mysql_export_blocking(
+    app: AppHandle,
+    operation_id: String,
     config: MysqlConfig,
     export_dir: String,
     table: Option<String>,
-) -> Result<String, String> {
+) -> Result<MysqlExportResult, String> {
     std::fs::create_dir_all(&export_dir).map_err(|e| e.to_string())?;
 
     let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S").to_string();
@@ -234,12 +299,14 @@ fn mysql_export_blocking(
         .args([
             "--single-transaction",
             "--quick",
+            "--extended-insert",
+            "--disable-keys",
             "--routines",
             "--events",
             "--triggers",
             "--hex-blob",
         ])
-        .stdout(Stdio::from(output_file))
+        .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
     if mysqldump
@@ -256,12 +323,12 @@ fn mysql_export_blocking(
         command.arg(table);
     }
 
-    let result = command.spawn().and_then(|child| child.wait_with_output());
-    let _ = std::fs::remove_file(&defaults_file);
+    emit_transfer_progress(&app, &operation_id, "export", "starting", 0, None);
 
-    let output = match result {
-        Ok(output) => output,
+    let mut child = match command.spawn() {
+        Ok(child) => child,
         Err(error) => {
+            let _ = std::fs::remove_file(&defaults_file);
             let _ = std::fs::remove_file(&file_path);
             return Err(format!(
                 "无法执行 mysqldump（{}）：{error}",
@@ -270,13 +337,94 @@ fn mysql_export_blocking(
         }
     };
 
-    if !output.status.success() {
+    let mut stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "无法读取 mysqldump 导出数据".to_string())?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| "无法读取 mysqldump 错误输出".to_string())?;
+    let stderr_reader = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let _ = BufReader::new(stderr).read_to_end(&mut bytes);
+        bytes
+    });
+
+    let mut writer = BufWriter::new(output_file);
+    let mut buffer = vec![0_u8; 1024 * 1024];
+    let mut processed_bytes = 0_u64;
+    let mut last_emit = Instant::now() - PROGRESS_EMIT_INTERVAL;
+    let copy_result: Result<(), String> = (|| {
+        loop {
+            let read = stdout
+                .read(&mut buffer)
+                .map_err(|e| format!("读取 mysqldump 导出数据失败：{e}"))?;
+            if read == 0 {
+                break;
+            }
+            writer
+                .write_all(&buffer[..read])
+                .map_err(|e| format!("写入导出文件失败：{e}"))?;
+            processed_bytes += read as u64;
+            if last_emit.elapsed() >= PROGRESS_EMIT_INTERVAL {
+                emit_transfer_progress(
+                    &app,
+                    &operation_id,
+                    "export",
+                    "transferring",
+                    processed_bytes,
+                    None,
+                );
+                last_emit = Instant::now();
+            }
+        }
+        writer
+            .flush()
+            .map_err(|e| format!("刷新导出文件失败：{e}"))?;
+        Ok(())
+    })();
+    drop(writer);
+
+    if copy_result.is_err() {
+        let _ = child.kill();
+    }
+    let status = child.wait();
+    let stderr = stderr_reader.join().unwrap_or_default();
+    let _ = std::fs::remove_file(&defaults_file);
+
+    if let Err(error) = copy_result {
         let _ = std::fs::remove_file(&file_path);
-        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(error);
+    }
+
+    let status = match status {
+        Ok(status) => status,
+        Err(error) => {
+            let _ = std::fs::remove_file(&file_path);
+            return Err(format!("等待 mysqldump 结束失败：{error}"));
+        }
+    };
+
+    if !status.success() {
+        let _ = std::fs::remove_file(&file_path);
+        let stderr = String::from_utf8_lossy(&stderr);
         return Err(format!("mysqldump 导出失败：{}", stderr.trim()));
     }
 
-    Ok(file_path.to_string_lossy().to_string())
+    emit_transfer_progress(
+        &app,
+        &operation_id,
+        "export",
+        "completed",
+        processed_bytes,
+        Some(processed_bytes),
+    );
+
+    Ok(MysqlExportResult {
+        file_path: file_path.to_string_lossy().to_string(),
+        processed_bytes,
+    })
 }
 
 fn find_mysqldump() -> Option<PathBuf> {
@@ -438,28 +586,314 @@ fn sanitize_filename_component(value: &str) -> String {
 }
 
 #[tauri::command]
-pub async fn mysql_import(config: MysqlConfig, file_path: String) -> Result<u64, String> {
-    let sql_content = std::fs::read_to_string(&file_path).map_err(|e| e.to_string())?;
-
-    let opts = mysql_async::OptsBuilder::default()
-        .ip_or_hostname(&config.host)
-        .tcp_port(config.port)
-        .user(Some(&config.user))
-        .pass(Some(&config.password))
-        .db_name(Some(&config.database));
-
-    let pool = mysql_async::Pool::new(opts);
-    let mut conn = pool.get_conn().await.map_err(|e| e.to_string())?;
-
-    use mysql_async::prelude::*;
-    conn.query_drop(&sql_content)
+pub async fn mysql_import(
+    app: AppHandle,
+    operation_id: String,
+    config: MysqlConfig,
+    file_path: String,
+) -> Result<MysqlImportResult, String> {
+    tokio::task::spawn_blocking(move || mysql_import_blocking(app, operation_id, config, file_path))
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| format!("导入任务异常结束：{e}"))?
+}
 
-    let statement_count = sql_content.matches(';').count() as u64;
+fn mysql_import_blocking(
+    app: AppHandle,
+    operation_id: String,
+    config: MysqlConfig,
+    file_path: String,
+) -> Result<MysqlImportResult, String> {
+    let file_path = Path::new(&file_path);
+    if !file_path.is_file() {
+        return Err(format!("文件不存在：{}", file_path.display()));
+    }
+    if !file_path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.eq_ignore_ascii_case("sql"))
+        .unwrap_or(false)
+    {
+        return Err("请选择 .sql 文件".to_string());
+    }
 
-    conn.disconnect().await.map_err(|e| e.to_string())?;
-    pool.disconnect().await.map_err(|e| e.to_string())?;
+    let mysql = find_mysql().ok_or_else(|| {
+        "找不到 mysql 客户端。\
+请确保 MySQL/MariaDB 客户端已安装（mysqldump 同目录下通常有 mysql 命令），\
+或设置 NALU_MYSQL_PATH 环境变量。"
+            .to_string()
+    })?;
 
-    Ok(statement_count)
+    let total_bytes = file_path
+        .metadata()
+        .map_err(|e| format!("无法读取 SQL 文件信息：{e}"))?
+        .len();
+    let source = std::fs::File::open(file_path).map_err(|e| e.to_string())?;
+    let defaults_file = create_mysql_defaults_file(&config)?;
+
+    let mut command = Command::new(&mysql);
+    command
+        .arg(format!(
+            "--defaults-extra-file={}",
+            defaults_file.to_string_lossy()
+        ))
+        .args([
+            "--silent",
+            "--binary-mode=1",
+            "--max-allowed-packet=1073741824",
+            "--net-buffer-length=1048576",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped());
+
+    // SQL text compresses well; protocol compression usually improves remote imports.
+    // Keep loopback imports uncompressed to avoid unnecessary CPU overhead.
+    if !is_loopback_mysql_host(&config.host) {
+        command.arg("--compress");
+    }
+    command.arg(&config.database);
+
+    emit_transfer_progress(
+        &app,
+        &operation_id,
+        "import",
+        "starting",
+        0,
+        Some(total_bytes),
+    );
+
+    let mut child = match command.spawn() {
+        Ok(child) => child,
+        Err(error) => {
+            let _ = std::fs::remove_file(&defaults_file);
+            return Err(format!("无法执行 mysql（{}）：{error}", mysql.display()));
+        }
+    };
+
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| "无法写入 mysql 导入进程".to_string())?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| "无法读取 mysql 错误输出".to_string())?;
+    let stderr_reader = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let _ = BufReader::new(stderr).read_to_end(&mut bytes);
+        bytes
+    });
+
+    let mut source = BufReader::new(source);
+    let mut buffer = vec![0_u8; 1024 * 1024];
+    let mut processed_bytes = 0_u64;
+    let mut last_emit = Instant::now() - PROGRESS_EMIT_INTERVAL;
+    let copy_result: Result<(), String> = (|| {
+        loop {
+            let read = source
+                .read(&mut buffer)
+                .map_err(|e| format!("读取 SQL 文件失败：{e}"))?;
+            if read == 0 {
+                break;
+            }
+            stdin
+                .write_all(&buffer[..read])
+                .map_err(|e| format!("向 mysql 写入 SQL 数据失败：{e}"))?;
+            processed_bytes += read as u64;
+            if last_emit.elapsed() >= PROGRESS_EMIT_INTERVAL || processed_bytes == total_bytes {
+                emit_transfer_progress(
+                    &app,
+                    &operation_id,
+                    "import",
+                    "transferring",
+                    processed_bytes,
+                    Some(total_bytes),
+                );
+                last_emit = Instant::now();
+            }
+        }
+        stdin
+            .flush()
+            .map_err(|e| format!("刷新 mysql 导入数据失败：{e}"))?;
+        Ok(())
+    })();
+    drop(stdin);
+
+    if copy_result.is_ok() {
+        emit_transfer_progress(
+            &app,
+            &operation_id,
+            "import",
+            "finalizing",
+            processed_bytes,
+            Some(total_bytes),
+        );
+    }
+
+    if copy_result.is_err() {
+        let _ = child.kill();
+    }
+    let status = child.wait();
+    let stderr = stderr_reader.join().unwrap_or_default();
+
+    let _ = std::fs::remove_file(&defaults_file);
+
+    if let Err(error) = copy_result {
+        let stderr = String::from_utf8_lossy(&stderr);
+        let trimmed = stderr.trim();
+        if !trimmed.is_empty() {
+            return Err(format!("MySQL 导入错误：{trimmed}"));
+        }
+        return Err(error);
+    }
+
+    let status = status.map_err(|e| format!("等待 mysql 导入结束失败：{e}"))?;
+    if !status.success() {
+        let stderr = String::from_utf8_lossy(&stderr);
+        let trimmed = stderr.trim();
+        if trimmed.is_empty() {
+            return Err("mysql 导入失败，无错误信息".to_string());
+        }
+        return Err(format!("MySQL 导入错误：{trimmed}"));
+    }
+
+    emit_transfer_progress(
+        &app,
+        &operation_id,
+        "import",
+        "completed",
+        processed_bytes,
+        Some(total_bytes),
+    );
+
+    Ok(MysqlImportResult { processed_bytes })
+}
+
+fn find_mysql() -> Option<PathBuf> {
+    if let Some(path) = std::env::var_os("NALU_MYSQL_PATH").map(PathBuf::from) {
+        if path.is_file() {
+            return Some(path);
+        }
+    }
+
+    if let Ok(executable) = std::env::current_exe() {
+        if let Some(directory) = executable.parent() {
+            for name in mysql_binary_names() {
+                let path = directory.join(name);
+                if path.is_file() {
+                    return Some(path);
+                }
+            }
+        }
+    }
+
+    for candidate in platform_mysql_candidates() {
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+
+    find_on_path_mysql()
+}
+
+fn mysql_binary_names() -> &'static [&'static str] {
+    #[cfg(target_os = "windows")]
+    {
+        &["mysql.exe", "mariadb.exe"]
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        &["mysql", "mariadb"]
+    }
+}
+
+fn platform_mysql_candidates() -> Vec<PathBuf> {
+    #[cfg(target_os = "macos")]
+    {
+        vec![
+            "/opt/homebrew/opt/mysql-client/bin/mysql".into(),
+            "/opt/homebrew/opt/mysql@8.4/bin/mysql".into(),
+            "/opt/homebrew/opt/mysql@8.0/bin/mysql".into(),
+            "/opt/homebrew/bin/mysql".into(),
+            "/usr/local/opt/mysql-client/bin/mysql".into(),
+            "/usr/local/opt/mysql@8.4/bin/mysql".into(),
+            "/usr/local/opt/mysql@8.0/bin/mysql".into(),
+            "/usr/local/bin/mysql".into(),
+            "/opt/homebrew/bin/mariadb".into(),
+            "/usr/local/bin/mariadb".into(),
+        ]
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let mut candidates = Vec::new();
+        for base in [
+            std::env::var_os("ProgramFiles"),
+            std::env::var_os("ProgramFiles(x86)"),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            let base = PathBuf::from(base);
+            for version in ["MySQL Server 9.0", "MySQL Server 8.4", "MySQL Server 8.0"] {
+                candidates.push(
+                    base.join("MySQL")
+                        .join(version)
+                        .join("bin")
+                        .join("mysql.exe"),
+                );
+            }
+        }
+        candidates
+    }
+    #[cfg(target_os = "linux")]
+    {
+        vec![
+            "/usr/bin/mysql".into(),
+            "/usr/local/bin/mysql".into(),
+            "/usr/bin/mariadb".into(),
+            "/usr/local/bin/mariadb".into(),
+        ]
+    }
+}
+
+fn find_on_path_mysql() -> Option<PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    for directory in std::env::split_paths(&path) {
+        for name in mysql_binary_names() {
+            let candidate = directory.join(name);
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+    None
+}
+
+fn is_loopback_mysql_host(host: &str) -> bool {
+    matches!(
+        host.trim()
+            .trim_matches(['[', ']'])
+            .to_ascii_lowercase()
+            .as_str(),
+        "localhost" | "127.0.0.1" | "::1"
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_loopback_mysql_host;
+
+    #[test]
+    fn detects_loopback_mysql_hosts() {
+        for host in ["localhost", "LOCALHOST", "127.0.0.1", "::1", "[::1]"] {
+            assert!(is_loopback_mysql_host(host), "{host} should be loopback");
+        }
+    }
+
+    #[test]
+    fn treats_lan_and_remote_mysql_hosts_as_remote() {
+        for host in ["192.168.1.10", "mysql.internal", "10.0.0.8"] {
+            assert!(!is_loopback_mysql_host(host), "{host} should be remote");
+        }
+    }
 }

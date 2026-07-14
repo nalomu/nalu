@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
+import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { downloadDir } from '@tauri-apps/api/path'
 import { writeText } from '@tauri-apps/plugin-clipboard-manager'
 import { open, save } from '@tauri-apps/plugin-dialog'
@@ -21,6 +22,18 @@ type Tab = 'databases' | 'users' | 'transfer' | 'settings';
 type ServerUser = { user: string; host: string; plugin: string };
 type MessageType = 'success' | 'error';
 type TransferKind = 'import' | 'export';
+type TransferStage = 'starting' | 'transferring' | 'finalizing' | 'completed' | 'failed';
+type MysqlTransferProgress = {
+  operationId: string;
+  kind: TransferKind;
+  stage: Exclude<TransferStage, 'failed'>;
+  processedBytes: number;
+  totalBytes: number | null;
+  percent: number | null;
+};
+type TransferProgress = Omit<MysqlTransferProgress, 'stage'> & { stage: TransferStage; label: string };
+type MysqlImportResult = { processedBytes: number };
+type MysqlExportResult = { filePath: string; processedBytes: number };
 const activeTab = ref<Tab>('databases')
 const config = reactive({ host: '127.0.0.1', port: 3306, user: 'root', password: '', database: '' })
 const connected = ref(false)
@@ -55,8 +68,9 @@ const confirmOpen = ref(false)
 const confirmTitle = ref('')
 const confirmMessage = ref('')
 let confirmResolver: ((value: boolean) => void) | null = null
-const transferProgress = ref<{ kind: TransferKind; label: string; percent: number } | null>(null)
-let transferTimer: ReturnType<typeof setInterval> | null = null
+const transferProgress = ref<TransferProgress | null>(null)
+let activeTransferOperationId: string | null = null
+let unlistenTransferProgress: UnlistenFn | null = null
 const PROTECTED_USERS = ['root', 'mysql.sys', 'mysql.session', 'mysql.infoschema', 'debian-sys-maint']
 const managedDatabases = computed(() => [...new Set([...databases.value, ...users.value.flatMap((item) => item.databases.split(',').map((value) => value.trim()).filter(Boolean))])].sort())
 const totalPages = computed(() => Math.max(1, Math.ceil(managedDatabases.value.length / pageSize)))
@@ -101,26 +115,56 @@ function resolveConfirm(value: boolean) {
   confirmResolver = null
 }
 
+function createOperationId() {
+  return crypto.randomUUID()
+}
+
 function startTransfer(kind: TransferKind, label: string) {
-  if (transferTimer) clearInterval(transferTimer)
-  transferProgress.value = { kind, label, percent: 8 }
-  transferTimer = setInterval(() => {
-    if (!transferProgress.value || transferProgress.value.percent >= 90) return
-    transferProgress.value.percent += transferProgress.value.percent < 60 ? 8 : 3
-  }, 500)
+  activeTransferOperationId = createOperationId()
+  transferProgress.value = {
+    operationId: activeTransferOperationId,
+    kind,
+    label,
+    stage: 'starting',
+    processedBytes: 0,
+    totalBytes: null,
+    percent: kind === 'import' ? 0 : null,
+  }
+  return activeTransferOperationId
 }
 
 function finishTransfer(successful: boolean) {
-  if (transferTimer) {
-    clearInterval(transferTimer)
-    transferTimer = null
-  }
   if (transferProgress.value) {
-    transferProgress.value.percent = successful ? 100 : 0
+    transferProgress.value.stage = successful ? 'completed' : 'failed'
+    transferProgress.value.label = successful
+      ? `${transferProgress.value.kind === 'import' ? '导入' : '导出'}完成`
+      : `${transferProgress.value.kind === 'import' ? '导入' : '导出'}失败`
+    if (successful) transferProgress.value.percent = 100
   }
-  setTimeout(() => {
-    transferProgress.value = null
-  }, successful ? 900 : 300)
+  activeTransferOperationId = null
+  if (successful) setTimeout(() => {
+    if (transferProgress.value?.stage === 'completed') transferProgress.value = null
+  }, 1200)
+}
+
+function isTransferRunning(kind: TransferKind) {
+  return transferProgress.value?.kind === kind
+    && ['starting', 'transferring', 'finalizing'].includes(transferProgress.value.stage)
+}
+
+function formatBytes(bytes: number) {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B'
+  const units = ['B', 'KB', 'MB', 'GB', 'TB']
+  const unitIndex = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1)
+  const value = bytes / 1024 ** unitIndex
+  return `${value.toFixed(unitIndex === 0 || value >= 100 ? 0 : 1)} ${units[unitIndex]}`
+}
+
+function transferAmount(progress: TransferProgress) {
+  if (progress.totalBytes !== null) {
+    return `${formatBytes(progress.processedBytes)} / ${formatBytes(progress.totalBytes)}`
+  }
+  return `已处理 ${formatBytes(progress.processedBytes)}`
 }
 
 function userForDatabase(database: string) { return users.value.find((item) => item.databases.split(',').map((value) => value.trim()).includes(database)) }
@@ -274,11 +318,12 @@ async function exportCredentials() {
 async function exportDatabase() {
   actionLoading.value = true
   clearMessages()
-  startTransfer('export', `正在导出 ${selectedExportDatabase.value}`)
+  const operationId = startTransfer('export', `正在导出 ${selectedExportDatabase.value}`)
   try {
-    lastExportPath.value = await invoke('mysql_export', { config: { ...config, database: selectedExportDatabase.value }, exportDir: exportDir.value, table: null })
+    const result = await invoke<MysqlExportResult>('mysql_export', { operationId, config: { ...config, database: selectedExportDatabase.value }, exportDir: exportDir.value, table: null })
+    lastExportPath.value = result.filePath
     finishTransfer(true)
-    showSuccess(`数据库已导出到 ${lastExportPath.value}`, '导出完成')
+    showSuccess(`数据库已导出（${formatBytes(result.processedBytes)}）到 ${lastExportPath.value}`, '导出完成')
   } catch (exception) {
     finishTransfer(false)
     showError(exception, '导出失败')
@@ -291,11 +336,11 @@ async function importDatabase() {
   if (!await requestConfirm('导入 SQL 文件', `确认导入到 ${selectedImportDatabase.value}？导入过程可能覆盖同名对象。`)) return
   actionLoading.value = true
   clearMessages()
-  startTransfer('import', `正在导入 ${selectedImportDatabase.value}`)
+  const operationId = startTransfer('import', `正在导入 ${selectedImportDatabase.value}`)
   try {
-    const statementCount = await invoke<number>('mysql_import', { config: { ...config, database: selectedImportDatabase.value }, filePath: importFile.value })
+    const result = await invoke<MysqlImportResult>('mysql_import', { operationId, config: { ...config, database: selectedImportDatabase.value }, filePath: importFile.value })
     finishTransfer(true)
-    showSuccess(`SQL 文件已导入，共执行约 ${statementCount} 条语句`, '导入完成')
+    showSuccess(`SQL 文件已导入，共传输 ${formatBytes(result.processedBytes)}`, '导入完成')
   } catch (exception) {
     finishTransfer(false)
     showError(exception, '导入失败')
@@ -313,6 +358,15 @@ async function updatePassword() {
 }
 
 onMounted(async () => {
+  unlistenTransferProgress = await listen<MysqlTransferProgress>('mysql-transfer-progress', ({ payload }) => {
+    if (payload.operationId !== activeTransferOperationId || !transferProgress.value) return
+    transferProgress.value = {
+      ...payload,
+      label: payload.stage === 'finalizing'
+        ? '数据已传输，正在等待 MySQL 完成'
+        : `${payload.kind === 'import' ? '正在导入' : '正在导出'} ${payload.kind === 'import' ? selectedImportDatabase.value : selectedExportDatabase.value}`,
+    }
+  })
   const saved = localStorage.getItem('nalu-mysql-config')
   if (saved) try {
     Object.assign(config, JSON.parse(saved))
@@ -330,6 +384,8 @@ onMounted(async () => {
   }
   if (config.password) await testConnection(false)
 })
+
+onUnmounted(() => unlistenTransferProgress?.())
 </script>
 
 <template>
@@ -510,18 +566,19 @@ onMounted(async () => {
                 {{ exportDir || '选择目录' }}
               </button>
               <button class="primary-button mt-4" :disabled="!selectedExportDatabase || !exportDir || actionLoading" @click="exportDatabase">
-                <LoaderCircle v-if="transferProgress?.kind === 'export'" class="w-4 h-4 animate-spin" />
+                <LoaderCircle v-if="isTransferRunning('export')" class="w-4 h-4 animate-spin" />
                 <Download v-else class="w-4 h-4" />
-                {{ transferProgress?.kind === 'export' ? '导出中' : '导出' }}
+                {{ isTransferRunning('export') ? '导出中' : '导出' }}
               </button>
               <button v-if="lastExportPath" class="action-link ml-3" @click="openPath(exportDir)">打开目录</button>
               <div v-if="transferProgress?.kind === 'export'" class="transfer-progress mt-4">
                 <div class="flex items-center justify-between text-xs">
                   <span>{{ transferProgress.label }}</span>
-                  <span>{{ transferProgress.percent }}%</span>
+                  <span>{{ transferProgress.percent === null ? transferAmount(transferProgress) : `${transferProgress.percent}% · ${transferAmount(transferProgress)}` }}</span>
                 </div>
-                <div class="progress-track">
-                  <div class="progress-bar" :style="{ width: `${transferProgress.percent}%` }" />
+                <div class="progress-track" :class="{ 'progress-track-indeterminate': transferProgress.percent === null }">
+                  <div v-if="transferProgress.percent !== null" class="progress-bar" :style="{ width: `${transferProgress.percent}%` }" />
+                  <div v-else class="progress-bar progress-bar-indeterminate" />
                 </div>
               </div>
             </div>
@@ -537,14 +594,14 @@ onMounted(async () => {
                 <Upload class="w-8 h-8" />
                 <span>{{ importFile || '选择 SQL 文件' }}</span></button>
               <button class="primary-button mt-4" :disabled="!selectedImportDatabase || !importFile || actionLoading" @click="importDatabase">
-                <LoaderCircle v-if="transferProgress?.kind === 'import'" class="w-4 h-4 animate-spin" />
+                <LoaderCircle v-if="isTransferRunning('import')" class="w-4 h-4 animate-spin" />
                 <Upload v-else class="w-4 h-4" />
-                {{ transferProgress?.kind === 'import' ? '导入中' : '开始导入' }}
+                {{ isTransferRunning('import') ? '导入中' : '开始导入' }}
               </button>
               <div v-if="transferProgress?.kind === 'import'" class="transfer-progress mt-4">
                 <div class="flex items-center justify-between text-xs">
                   <span>{{ transferProgress.label }}</span>
-                  <span>{{ transferProgress.percent }}%</span>
+                  <span>{{ transferProgress.percent === null ? transferAmount(transferProgress) : `${transferProgress.percent}% · ${transferAmount(transferProgress)}` }}</span>
                 </div>
                 <div class="progress-track">
                   <div class="progress-bar" :style="{ width: `${transferProgress.percent}%` }" />
@@ -729,6 +786,20 @@ table td {
 
 .progress-bar {
   @apply h-full rounded-full bg-primary transition-all duration-500;
+}
+
+.progress-track-indeterminate {
+  @apply relative;
+}
+
+.progress-bar-indeterminate {
+  width: 35%;
+  animation: mysql-progress-indeterminate 1.2s ease-in-out infinite;
+}
+
+@keyframes mysql-progress-indeterminate {
+  from { transform: translateX(-110%); }
+  to { transform: translateX(310%); }
 }
 
 .password-field {

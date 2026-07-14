@@ -282,8 +282,8 @@ CREATE TABLE IF NOT EXISTS mysql_users (
 | `mysql_query` | `config, sql` | `MysqlResult` | 执行查询 |
 | `mysql_execute` | `config, sql` | `u64` | 执行非查询 SQL |
 | `mysql_list_databases` | `config` | `Vec<String>` | 列出数据库（过滤系统库） |
-| `mysql_export` | `config, export_dir, table?` | `String` | mysqldump 导出 |
-| `mysql_import` | `config, file_path` | `u64` | 导入 SQL 文件 |
+| `mysql_export` | `operation_id, config, export_dir, table?` | `MysqlExportResult` | mysqldump 流式导出并发送实时字节进度 |
+| `mysql_import` | `operation_id, config, file_path` | `MysqlImportResult` | 流式导入 SQL 文件并发送真实百分比进度；远程连接自动启用协议压缩 |
 
 ### MySQL Users
 | 命令 | 参数 | 返回 | 说明 |
