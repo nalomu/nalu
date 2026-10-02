@@ -1,6 +1,7 @@
 <script setup lang="ts">
+import ClipboardImage from './ClipboardImage.vue'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { convertFileSrc, invoke } from '@tauri-apps/api/core'
+import { invoke } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { listen } from '@tauri-apps/api/event'
 import { Copy, FileText, Type, Search, X, Scissors, TriangleAlert } from 'lucide-vue-next'
@@ -58,10 +59,6 @@ function isImage(entry: ClipboardEntry) {
   return entry.content_type === 'image' || entry.content_type.startsWith('image/') || entry.content_type === 'image_file'
 }
 
-function imageSrc(content: string) {
-  if (/^(data:|https?:|asset:)/.test(content)) return content
-  return content.startsWith('file://') ? convertFileSrc(content.slice(7)) : content.startsWith('/') ? convertFileSrc(content) : content
-}
 
 async function copyEntry(entry: ClipboardEntry) {
   try {
@@ -221,7 +218,7 @@ onBeforeUnmount(() => {
           @click="copyEntry(entry)"
           @mouseenter="selectedIndex = index"
         >
-          <img v-if="isImage(entry)" :src="imageSrc(entry.content)" class="w-10 h-10 rounded object-cover" alt="" />
+          <ClipboardImage v-if="isImage(entry)" :id="entry.id" :content="entry.content" class="w-10 h-10" />
           <FileText v-else-if="entry.content_type === 'file'" class="w-4 h-4 text-amber-500" />
           <Type v-else class="w-4 h-4 text-blue-400" />
           <span class="flex-1 min-w-0 text-xs truncate">{{ preview(entry) }}</span>

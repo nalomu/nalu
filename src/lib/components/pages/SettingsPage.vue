@@ -381,6 +381,10 @@ onMounted(async () => {
           <span class="absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform" :class="{ 'translate-x-5': clipboardStore.monitoring }" /></button>
       </div>
       <p class="text-xs text-muted-foreground mb-3">{{ t('clipboardSettings.desc') }}</p>
+      <div v-if="clipboardStore.monitoring && clipboardStore.diskAccess !== 'unsupported'" class="flex gap-3 mb-3 text-xs text-muted-foreground">
+        <button class="underline" @click="clipboardStore.openDiskAccessSettings().catch(console.error)">{{ t('clipboard.openDiskAccess') }}</button>
+        <button class="underline" @click="clipboardStore.refreshDiskAccess().catch(console.error)">{{ t('clipboard.recheckDiskAccess') }}</button>
+      </div>
       <div class="flex items-center gap-3 mb-3">
         <span class="text-xs text-muted-foreground">{{ t('clipboardSettings.shortcut') }}</span>
         <div

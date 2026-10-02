@@ -65,8 +65,8 @@ pub enum DiskAccess {
     Unsupported,
 }
 
-/// macOS has no public FDA authorization API. Probe read access without reading TCC data.
-/// Absence/other failures are unknown, not proof of a grant or a denial.
+/// A capability probe, not a public macOS authorization-state API.
+/// TCC.db is a protected system database and is unsuitable as a general file-access probe.
 #[tauri::command]
 pub fn check_full_disk_access(app: tauri::AppHandle) -> DiskAccess {
     #[cfg(target_os = "macos")]
@@ -74,15 +74,27 @@ pub fn check_full_disk_access(app: tauri::AppHandle) -> DiskAccess {
         let Ok(home) = app.path().home_dir() else {
             return DiskAccess::Unknown;
         };
-        match std::fs::File::open(home.join("Library/Application Support/com.apple.TCC/TCC.db")) {
-            Ok(_) => DiskAccess::Granted,
-            Err(e)
-                if e.kind() == std::io::ErrorKind::PermissionDenied
-                    || e.raw_os_error() == Some(1) =>
-            {
-                DiskAccess::Denied
+        let mut denied = false;
+        for relative in [
+            "Library/Safari/History.db",
+            "Library/Safari/Bookmarks.plist",
+        ] {
+            // Open only; never read the contents of other applications' private data.
+            match std::fs::File::open(home.join(relative)) {
+                Ok(_) => return DiskAccess::Granted,
+                Err(e)
+                    if e.kind() == std::io::ErrorKind::PermissionDenied
+                        || e.raw_os_error() == Some(1) =>
+                {
+                    denied = true
+                }
+                Err(_) => {}
             }
-            Err(_) => DiskAccess::Unknown,
+        }
+        if denied {
+            DiskAccess::Denied
+        } else {
+            DiskAccess::Unknown
         }
     }
     #[cfg(not(target_os = "macos"))]
@@ -119,6 +131,16 @@ struct Capture {
 fn capture() -> Result<Option<Capture>, String> {
     let refs = clipboard::read_clipboard_file_references_impl()?;
     if !refs.is_empty() {
+        // Container URLs can be unreadable while the provider offers a usable bitmap.
+        // Keep ordinary files as references; use the bitmap fallback only for one image.
+        if refs.len() == 1
+            && refs[0].is_image
+            && std::fs::File::open(&refs[0].path).is_err()
+            && let Ok(mut cb) = arboard::Clipboard::new()
+            && let Ok(image) = cb.get_image()
+        {
+            return bitmap_capture(image).map(Some);
+        }
         let kind = if refs.len() == 1 && refs[0].is_image {
             "image_file"
         } else {
@@ -139,21 +161,7 @@ fn capture() -> Result<Option<Capture>, String> {
     let mut cb = arboard::Clipboard::new().map_err(|e| e.to_string())?;
     match cb.get_image() {
         Ok(image) => {
-            // Hash actual pixels before PNG encoding; dimensions alone never identify an image.
-            let fingerprint = pixel_fingerprint(image.width, image.height, &image.bytes);
-            let width = u32::try_from(image.width).map_err(|e| e.to_string())?;
-            let height = u32::try_from(image.height).map_err(|e| e.to_string())?;
-            let mut bytes = std::io::Cursor::new(Vec::new());
-            let rgba = image::RgbaImage::from_raw(width, height, image.bytes.into_owned())
-                .ok_or("Invalid clipboard image dimensions")?;
-            rgba.write_to(&mut bytes, image::ImageFormat::Png)
-                .map_err(|e| e.to_string())?;
-            return Ok(Some(Capture {
-                content: String::new(),
-                content_type: "image",
-                image_bytes: Some(bytes.into_inner()),
-                fingerprint,
-            }));
+            return bitmap_capture(image).map(Some);
         }
         Err(arboard::Error::ContentNotAvailable) => {}
         Err(e) => return Err(format!("read clipboard image: {e}")),
@@ -178,6 +186,24 @@ fn capture() -> Result<Option<Capture>, String> {
         Ok(_) | Err(arboard::Error::ContentNotAvailable) => Ok(None),
         Err(e) => Err(format!("read clipboard text: {e}")),
     }
+}
+
+#[cfg(desktop)]
+fn bitmap_capture(image: arboard::ImageData<'_>) -> Result<Capture, String> {
+    let fingerprint = pixel_fingerprint(image.width, image.height, &image.bytes);
+    let width = u32::try_from(image.width).map_err(|e| e.to_string())?;
+    let height = u32::try_from(image.height).map_err(|e| e.to_string())?;
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    let rgba = image::RgbaImage::from_raw(width, height, image.bytes.into_owned())
+        .ok_or("Invalid clipboard image dimensions")?;
+    rgba.write_to(&mut bytes, image::ImageFormat::Png)
+        .map_err(|e| e.to_string())?;
+    Ok(Capture {
+        content: String::new(),
+        content_type: "image",
+        image_bytes: Some(bytes.into_inner()),
+        fingerprint,
+    })
 }
 
 #[cfg(desktop)]

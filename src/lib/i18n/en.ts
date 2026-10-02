@@ -117,7 +117,9 @@ export const en = {
     allTags: "All tags",
   },
   clipboard: {
-    diskAccessGuide: "Add and enable Nalu in System Settings → Privacy & Security → Full Disk Access to read protected source files you copy. Access is not confirmed; readable clipboard content is still recorded. macOS may require restarting Nalu.",
+    diskAccessGuide: "Some protected files are currently unreadable. If Full Disk Access is already enabled for Nalu, restart the app and check again. This file-access probe does not determine the exact system authorization state.",
+    dismissDiskAccess: "Dismiss reminder",
+    imageUnavailable: "Image is currently unreadable. Click to retry",
     openDiskAccess: "Open Full Disk Access settings",
     recheckDiskAccess: "Check again",
     monitorFailed: "Clipboard monitoring could not start. Turn it off and on to retry.",

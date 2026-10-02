@@ -159,6 +159,74 @@ pub fn get_clipboard_entry(id: String) -> Result<ClipboardEntry, String> {
     .map_err(|e| e.to_string())
 }
 
+static THUMBNAIL_READ_LIMIT: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);
+
+/// Resolve by history ID instead of exposing arbitrary external paths to the asset protocol.
+#[tauri::command]
+pub async fn get_clipboard_image_thumbnail(id: String) -> Result<String, String> {
+    let _permit = THUMBNAIL_READ_LIMIT
+        .acquire()
+        .await
+        .map_err(|e| e.to_string())?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let entry = get_clipboard_entry(id)?;
+        if !is_bitmap_image_type(&entry.content_type) && entry.content_type != "image_file" {
+            return Err("clipboard entry is not an image".into());
+        }
+        encode_clipboard_thumbnail(&entry.content)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+fn encode_clipboard_thumbnail(content: &str) -> Result<String, String> {
+    use base64::{Engine as _, engine::general_purpose};
+    let bytes = read_image_bytes_from_content(content)?;
+    let image = decode_thumbnail_image(&bytes)?;
+    let thumbnail = image.thumbnail(160, 160);
+    let mut png = std::io::Cursor::new(Vec::new());
+    thumbnail
+        .write_to(&mut png, image::ImageFormat::Png)
+        .map_err(|e| e.to_string())?;
+    Ok(format!(
+        "data:image/png;base64,{}",
+        general_purpose::STANDARD.encode(png.into_inner())
+    ))
+}
+
+fn decode_thumbnail_image(bytes: &[u8]) -> Result<image::DynamicImage, String> {
+    match image::load_from_memory(bytes) {
+        Ok(image) => Ok(image),
+        Err(error) => {
+            #[cfg(target_os = "macos")]
+            {
+                use objc2::AnyThread;
+                use objc2_app_kit::{NSBitmapImageFileType, NSBitmapImageRep};
+                use objc2_foundation::{NSData, NSDictionary};
+                // Let macOS decode formats not enabled in the Rust image crate (e.g. GIF).
+                objc2::rc::autoreleasepool(|_| {
+                    let data = NSData::with_bytes(bytes);
+                    let rep = NSBitmapImageRep::initWithData(NSBitmapImageRep::alloc(), &data)
+                        .ok_or_else(|| format!("decode thumbnail failed: {error}"))?;
+                    // SAFETY: the empty property dictionary has no values with mismatched types.
+                    let png = unsafe {
+                        rep.representationUsingType_properties(
+                            NSBitmapImageFileType::PNG,
+                            &NSDictionary::new(),
+                        )
+                    }
+                    .ok_or_else(|| "native thumbnail conversion failed".to_string())?;
+                    image::load_from_memory(&png.to_vec()).map_err(|e| e.to_string())
+                })
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                Err(format!("decode thumbnail failed: {error}"))
+            }
+        }
+    }
+}
+
 #[tauri::command]
 pub fn clear_clipboard_history(app: tauri::AppHandle) -> Result<usize, String> {
     let db = get_connection()?;
@@ -773,8 +841,16 @@ fn read_image_bytes_from_content(content: &str) -> Result<Vec<u8>, String> {
 
     if trimmed.starts_with("file://") || trimmed.starts_with('/') {
         let path = normalize_file_path(trimmed);
-        return std::fs::read(&path)
-            .map_err(|e| format!("read image file failed: path={path}, err={e}"));
+        return std::fs::read(&path).map_err(|e| {
+            let marker = if e.kind() == std::io::ErrorKind::PermissionDenied
+                || e.raw_os_error() == Some(1)
+            {
+                "CLIPBOARD_IMAGE_ACCESS_DENIED: "
+            } else {
+                ""
+            };
+            format!("{marker}read image file failed: path={path}, err={e}")
+        });
     }
 
     // Some old records may only store raw base64 without the data:image/... prefix.
@@ -1009,5 +1085,42 @@ mod native_file_tests {
             assert!(refs[0].is_image);
             pb.clearContents();
         });
+    }
+}
+
+#[cfg(test)]
+mod thumbnail_tests {
+    use super::*;
+    #[test]
+    fn reads_external_image_and_returns_bounded_png_data() {
+        use base64::{Engine as _, engine::general_purpose};
+        let path =
+            std::env::temp_dir().join(format!("nalu-container-image-{}.png", uuid::Uuid::new_v4()));
+        image::RgbaImage::from_pixel(320, 240, image::Rgba([255, 0, 0, 255]))
+            .save(&path)
+            .unwrap();
+        let result = encode_clipboard_thumbnail(path.to_str().unwrap());
+        std::fs::remove_file(&path).unwrap();
+        let data_url = result.unwrap();
+        let bytes = general_purpose::STANDARD
+            .decode(data_url.strip_prefix("data:image/png;base64,").unwrap())
+            .unwrap();
+        let decoded = image::load_from_memory(&bytes).unwrap();
+        assert_eq!((decoded.width(), decoded.height()), (160, 120));
+    }
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_decodes_gif_without_rust_gif_feature() {
+        let image = encode_clipboard_thumbnail(
+            "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7",
+        )
+        .unwrap();
+        assert!(image.starts_with("data:image/png;base64,"));
+    }
+    #[test]
+    fn inaccessible_or_missing_source_is_an_error_not_a_broken_asset_url() {
+        let path =
+            std::env::temp_dir().join(format!("missing-nalu-image-{}.png", uuid::Uuid::new_v4()));
+        assert!(encode_clipboard_thumbnail(path.to_str().unwrap()).is_err());
     }
 }

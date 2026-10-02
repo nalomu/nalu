@@ -25,7 +25,7 @@ export function useClipboardMonitor() {
       try {
         await store.refreshDiskAccess();
         // Existing users get one migration guide. Later launches do not reopen Settings.
-        if (store.monitoring && requestGuide && store.diskAccess !== "granted" && store.diskAccess !== "unsupported") {
+        if (store.monitoring && !store.diskGuideDismissed && requestGuide && store.diskAccess !== "granted" && store.diskAccess !== "unsupported") {
           await store.openDiskAccessSettings();
           localStorage.setItem(permissionGuideKey, "true");
         } else if (store.diskAccess === "granted") {

@@ -924,6 +924,7 @@ pub fn run() {
             commands::clipboard::delete_clipboard_entry,
             commands::clipboard::clear_clipboard_history,
             commands::clipboard::get_clipboard_entry,
+            commands::clipboard::get_clipboard_image_thumbnail,
             commands::clipboard::write_clipboard_entry_to_system,
             commands::clipboard::save_clipboard_image_data_url,
             commands::clipboard::read_clipboard_file_references,

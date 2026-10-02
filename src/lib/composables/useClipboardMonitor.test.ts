@@ -91,4 +91,28 @@ describe("native clipboard monitoring and permission migration", () => {
     expect(mocks.invoke).toHaveBeenLastCalledWith("set_clipboard_monitoring", { enabled: false });
     expect(mocks.invoke).not.toHaveBeenCalledWith("open_full_disk_access_settings");
   });
+  it("does not warn for unknown access or treat dismissal as a system grant", async () => {
+    access = "unknown";
+    localStorage.setItem("nalu-clipboard-monitoring", "true");
+    const store = start();
+    await flush();
+    expect(store.diskAccess).toBe("unknown");
+    expect(store.showDiskAccessNotice).toBe(false);
+    access = "denied";
+    await store.refreshDiskAccess();
+    expect(store.showDiskAccessNotice).toBe(false);
+    store.reportImageAccessDenied("qq-image");
+    expect(store.showDiskAccessNotice).toBe(true);
+    store.dismissDiskAccessNotice();
+    expect(store.diskAccess).toBe("denied");
+    expect(store.showDiskAccessNotice).toBe(false);
+    scope.stop();
+    setActivePinia(createPinia());
+    mocks.invoke.mockClear();
+    const restored = start();
+    await flush();
+    expect(restored.diskGuideDismissed).toBe(true);
+    expect(mocks.invoke).not.toHaveBeenCalledWith("open_full_disk_access_settings");
+  });
+
 });

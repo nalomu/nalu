@@ -1,7 +1,8 @@
 <script setup lang="ts">
+import ClipboardImage from '../ClipboardImage.vue'
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { storeToRefs } from 'pinia'
-import { convertFileSrc, invoke } from '@tauri-apps/api/core'
+import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { Trash2, Copy, Trash, Radio, FileText, Type, Bug } from 'lucide-vue-next'
 import type { ClipboardEntry } from '$lib/types'
@@ -39,10 +40,6 @@ async function clearAll() {
 
 async function openPopup() { await invoke('toggle_clipboard_popup') }
 
-function imageSrc(content: string) {
-  if (/^(data:|https?:|asset:)/.test(content)) return content
-  return content.startsWith('file://') ? convertFileSrc(content.slice(7)) : content.startsWith('/') ? convertFileSrc(content) : content
-}
 
 onMounted(async () => {
   const unlisten = await listen('clipboard-history-changed', loadHistory)
@@ -80,7 +77,7 @@ useAiRefresh(loadHistory)
     </div>
     <div class="space-y-1.5">
       <div v-for="entry in entries" :key="entry.id" class="group flex items-center gap-3 px-4 py-3 rounded-lg bg-card border">
-        <img v-if="entry.content_type === 'image' || entry.content_type === 'image_file'" :src="imageSrc(entry.content)" class="w-16 h-16 rounded object-cover" alt="clipboard image" />
+        <ClipboardImage v-if="entry.content_type.startsWith('image')" :id="entry.id" :content="entry.content" class="w-16 h-16" />
         <FileText v-else-if="entry.content_type === 'file'" class="w-5 h-5 text-amber-500" />
         <Type v-else class="w-4 h-4 text-blue-500" />
         <div class="flex-1 text-sm truncate">{{
