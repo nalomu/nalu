@@ -126,6 +126,10 @@ export const zh = {
 
   // Clipboard
   clipboard: {
+    diskAccessGuide: "请在系统设置 → 隐私与安全性 → 完全磁盘访问中添加并开启 Nalu，以读取复制文件的受保护源路径。尚未确认授权，可读取的剪贴板内容仍会记录；系统可能要求重启 Nalu。",
+    openDiskAccess: "打开完全磁盘访问设置",
+    recheckDiskAccess: "重新检查",
+    monitorFailed: "剪贴板监听启动失败，请关闭后重新开启。",
     title: "剪贴板历史",
     clearAll: "清空全部",
     noHistory: "暂无剪贴板历史",

@@ -3,7 +3,7 @@ use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 #[cfg(target_os = "macos")]
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
 #[cfg(target_os = "macos")]
 use std::sync::Mutex;
 #[cfg(target_os = "macos")]
@@ -179,63 +179,39 @@ pub async fn read_clipboard_file_references() -> Result<Vec<ClipboardFileReferen
 }
 
 #[cfg(target_os = "macos")]
-fn read_clipboard_file_references_impl() -> Result<Vec<ClipboardFileReference>, String> {
-    // Read real file URLs from the macOS pasteboard.
-    // This is different from readText()/readImage(): Finder often exposes both file URLs
-    // and a bitmap/icon preview. We must read file URLs first to avoid degrading files
-    // into screenshots/previews.
-    let script = r#"
-use framework "AppKit"
-use scripting additions
+pub(super) fn read_clipboard_file_references_impl() -> Result<Vec<ClipboardFileReference>, String> {
+    objc2::rc::autoreleasepool(|_| {
+        read_file_refs_from_pasteboard(&objc2_app_kit::NSPasteboard::generalPasteboard())
+    })
+}
 
-set pb to current application's NSPasteboard's generalPasteboard()
-set options to current application's NSDictionary's dictionaryWithObject:(true) forKey:(current application's NSPasteboardURLReadingFileURLsOnlyKey)
-set urls to pb's readObjectsForClasses:({current application's NSURL}) options:options
-
-if urls is missing value then return ""
-
-set output to {}
-repeat with u in urls
-    set p to (u's |path|()) as text
-    if p is not missing value and p is not "" then
-        set end of output to p
-    end if
-end repeat
-
-set AppleScript's text item delimiters to linefeed
-return output as text
-"#;
-
-    let out = run_osascript_with_timeout(script, Duration::from_millis(1500))
-        .map_err(|e| format!("osascript read file references failed: {e}"))?;
-
-    if !out.status.success() {
-        let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
-        tracing::warn!("[clipboard] read file references failed: {}", err);
-        return Ok(Vec::new());
-    }
-
-    let stdout = String::from_utf8_lossy(&out.stdout);
+#[cfg(target_os = "macos")]
+fn read_file_refs_from_pasteboard(
+    pb: &objc2_app_kit::NSPasteboard,
+) -> Result<Vec<ClipboardFileReference>, String> {
+    use objc2_foundation::{NSString, NSURL};
     let mut refs = Vec::new();
-
-    for line in stdout.lines() {
-        let path = normalize_file_path(line);
-        if path.is_empty() || path == "missing value" {
-            continue;
+    if let Some(items) = pb.pasteboardItems() {
+        let file_type = NSString::from_str("public.file-url");
+        for item in items.iter() {
+            let Some(value) = item.stringForType(&file_type) else {
+                continue;
+            };
+            let Some(url) = NSURL::URLWithString(&value) else {
+                continue;
+            };
+            if !url.isFileURL() {
+                continue;
+            }
+            let Some(path) = url.path() else { continue };
+            let path = path.to_string();
+            // Keep the reference even when the source file is protected or transient.
+            // A failed stat must not turn a real file into its preview bitmap.
+            refs.push(ClipboardFileReference {
+                is_image: path_has_image_extension(&path),
+                path,
+            });
         }
-
-        if !std::path::Path::new(&path).exists() {
-            tracing::warn!(
-                "[clipboard] pasteboard file path does not exist, skip: {}",
-                path
-            );
-            continue;
-        }
-
-        refs.push(ClipboardFileReference {
-            is_image: path_has_image_extension(&path),
-            path,
-        });
     }
 
     refs.sort_by(|a, b| a.path.cmp(&b.path));
@@ -274,7 +250,7 @@ fn should_log_native_file_refs(refs: &[ClipboardFileReference]) -> bool {
 }
 
 #[cfg(not(target_os = "macos"))]
-fn read_clipboard_file_references_impl() -> Result<Vec<ClipboardFileReference>, String> {
+pub(super) fn read_clipboard_file_references_impl() -> Result<Vec<ClipboardFileReference>, String> {
     Ok(Vec::new())
 }
 
@@ -286,18 +262,24 @@ pub fn save_clipboard_image_data_url(
     let bytes = decode_data_url(&data_url)?
         .ok_or_else(|| "invalid image data URL: expected data:image/...;base64,...".to_string())?;
 
-    // Validate the image before saving, so broken base64 does not enter history.
-    let img = image::load_from_memory(&bytes)
+    save_clipboard_image_bytes(&app, &bytes)
+}
+
+pub(super) fn save_clipboard_image_bytes(
+    app: &tauri::AppHandle,
+    bytes: &[u8],
+) -> Result<String, String> {
+    // Validate the image before saving, so broken bytes do not enter history.
+    let img = image::load_from_memory(bytes)
         .map_err(|e| format!("decode image before save failed: {e}"))?;
     let width = img.width();
     let height = img.height();
 
     // If the same image is already in history, return its existing path.
     // add_clipboard_entry will then update created_at and move it to the top.
-    let content_hash = image_bytes_hash(&bytes);
     if let Ok(db) = get_connection()
         && let Some(conn) = db.as_ref()
-        && let Some(existing) = find_duplicate_image_entry_by_hash(conn, &content_hash)?
+        && let Some(existing) = find_duplicate_image_entry_by_bytes(conn, bytes)?
     {
         tracing::info!(
             "[clipboard] duplicate image save skipped, reuse existing path: id={}, path={}",
@@ -421,7 +403,10 @@ fn find_duplicate_entry(
 
     if is_bitmap_image_type(&normalized_type) {
         return match content_hash {
-            Some(hash) => find_duplicate_image_entry_by_hash(conn, hash),
+            Some(_) => {
+                let bytes = read_image_bytes_from_content(content)?;
+                find_duplicate_image_entry_by_bytes(conn, &bytes)
+            }
             None => find_duplicate_image_entry_by_exact_content(conn, content),
         };
     }
@@ -474,6 +459,35 @@ fn find_duplicate_image_entry_by_hash(
     .map_err(|e| e.to_string())
 }
 
+// Upgrade old FNV-1a hashes lazily, without discarding existing history.
+fn find_duplicate_image_entry_by_bytes(
+    conn: &Connection,
+    bytes: &[u8],
+) -> Result<Option<ClipboardEntry>, String> {
+    let hash = image_bytes_hash(bytes);
+    for legacy in [false, true] {
+        let key = if legacy {
+            legacy_image_bytes_hash(bytes)
+        } else {
+            hash.clone()
+        };
+        if let Some(entry) = find_duplicate_image_entry_by_hash(conn, &key)? {
+            // Verify bytes as well: a hash collision must not drop clipboard content.
+            if read_image_bytes_from_content(&entry.content).is_ok_and(|old| old == bytes) {
+                if legacy {
+                    conn.execute(
+                        "UPDATE clipboard_history SET content_hash = ?1 WHERE id = ?2",
+                        rusqlite::params![hash, entry.id],
+                    )
+                    .map_err(|e| e.to_string())?;
+                }
+                return Ok(Some(entry));
+            }
+        }
+    }
+    Ok(None)
+}
+
 fn row_to_clipboard_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<ClipboardEntry> {
     Ok(ClipboardEntry {
         id: row.get(0)?,
@@ -498,6 +512,10 @@ fn content_hash_for_entry(content: &str, content_type: &str) -> Option<String> {
 }
 
 fn image_bytes_hash(bytes: &[u8]) -> String {
+    format!("blake3:{}", blake3::hash(bytes).to_hex())
+}
+
+fn legacy_image_bytes_hash(bytes: &[u8]) -> String {
     let mut hash = 0xcbf29ce484222325u64;
     for byte in bytes {
         hash ^= u64::from(*byte);
@@ -595,7 +613,7 @@ fn normalize_file_reference_content(content: &str) -> String {
     }
 }
 
-fn normalize_file_path(value: &str) -> String {
+pub(super) fn normalize_file_path(value: &str) -> String {
     let mut path = value.trim().to_string();
     if path.starts_with("file://localhost") {
         path = path.trim_start_matches("file://localhost").to_string();
@@ -611,6 +629,8 @@ fn run_osascript_with_timeout(script: &str, timeout: Duration) -> Result<Output,
     let mut child = Command::new("osascript")
         .arg("-e")
         .arg(script)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| e.to_string())?;
 
@@ -911,5 +931,83 @@ fn cleanup_unreferenced_clipboard_images(app: &tauri::AppHandle, conn: &Connecti
         if !referenced {
             cleanup_stored_image_file(&path_text);
         }
+    }
+}
+
+#[cfg(test)]
+mod hash_tests {
+    use super::*;
+
+    fn history_db() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE clipboard_history (id TEXT PRIMARY KEY, content TEXT, content_type TEXT, content_hash TEXT, created_at TEXT);").unwrap();
+        conn
+    }
+
+    #[test]
+    fn legacy_image_hash_is_upgraded_without_replacing_history() {
+        let conn = history_db();
+        let bytes = b"old image bytes";
+        let content = format!(
+            "data:image/png;base64,{}",
+            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, bytes)
+        );
+        conn.execute(
+            "INSERT INTO clipboard_history VALUES ('old', ?1, 'image', ?2, '2026-01-01')",
+            rusqlite::params![content, legacy_image_bytes_hash(bytes)],
+        )
+        .unwrap();
+        let entry = find_duplicate_image_entry_by_bytes(&conn, bytes)
+            .unwrap()
+            .unwrap();
+        assert_eq!(entry.id, "old");
+        assert_eq!(
+            conn.query_row("SELECT content_hash FROM clipboard_history", [], |r| r
+                .get::<_, String>(
+                0
+            ))
+            .unwrap(),
+            image_bytes_hash(bytes)
+        );
+        assert!(
+            find_duplicate_image_entry_by_bytes(&conn, b"new image bytes")
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn matching_hash_with_different_bytes_does_not_drop_content() {
+        let conn = history_db();
+        conn.execute("INSERT INTO clipboard_history VALUES ('other', 'data:image/png;base64,YQ==', 'image', ?1, '2026-01-01')", [image_bytes_hash(b"b")]).unwrap();
+        assert!(
+            find_duplicate_image_entry_by_bytes(&conn, b"b")
+                .unwrap()
+                .is_none()
+        );
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod native_file_tests {
+    use super::*;
+    #[test]
+    fn reads_native_file_url_without_stat_or_script_output() {
+        objc2::rc::autoreleasepool(|_| {
+            use objc2_app_kit::NSPasteboard;
+            use objc2_foundation::NSString;
+            // A separate pasteboard keeps the user's real clipboard untouched.
+            let pb = NSPasteboard::pasteboardWithUniqueName();
+            pb.clearContents();
+            assert!(pb.setString_forType(
+                &NSString::from_str("file:///nonexistent/clipboard%20image.png"),
+                &NSString::from_str("public.file-url")
+            ));
+            let refs = read_file_refs_from_pasteboard(&pb).unwrap();
+            assert_eq!(refs.len(), 1);
+            assert_eq!(refs[0].path, "/nonexistent/clipboard image.png");
+            assert!(refs[0].is_image);
+            pb.clearContents();
+        });
     }
 }

@@ -2,6 +2,7 @@
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { storeToRefs } from 'pinia'
 import { convertFileSrc, invoke } from '@tauri-apps/api/core'
+import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { Trash2, Copy, Trash, Radio, FileText, Type, Bug } from 'lucide-vue-next'
 import type { ClipboardEntry } from '$lib/types'
 import { useClipboardStore } from '$lib/stores/clipboardStore'
@@ -13,6 +14,8 @@ const store = useClipboardStore()
 const { monitoring } = storeToRefs(store)
 const entries = ref<ClipboardEntry[]>([])
 let interval: ReturnType<typeof setInterval>
+let unlistenHistory: UnlistenFn | undefined
+let disposed = false
 
 async function loadHistory() {
   try {
@@ -42,10 +45,13 @@ function imageSrc(content: string) {
 }
 
 onMounted(async () => {
+  const unlisten = await listen('clipboard-history-changed', loadHistory)
+  if (disposed) { unlisten(); return }
+  unlistenHistory = unlisten
   await loadHistory()
-  interval = setInterval(loadHistory, 5000)
+  if (!disposed) interval = setInterval(loadHistory, 5000)
 })
-onBeforeUnmount(() => clearInterval(interval))
+onBeforeUnmount(() => { disposed = true; clearInterval(interval); unlistenHistory?.() })
 useAiRefresh(loadHistory)
 </script>
 

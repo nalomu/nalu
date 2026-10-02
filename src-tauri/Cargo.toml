@@ -60,11 +60,12 @@ uuid = { version = "1", features = ["v4"] }
 base64 = "0.22"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
 arboard = "3"
+blake3 = "1"
 
 # macOS CGEvent for keyboard simulation (paste via Cmd+V)
 [target.'cfg(target_os = "macos")'.dependencies]
 core-graphics = "0.24"
 objc2 = "0.6"
-objc2-foundation = { version = "0.3", features = ["NSString", "NSArray", "NSObject"] }
-objc2-app-kit = { version = "0.3", features = ["NSRunningApplication", "NSWorkspace", "NSView", "NSWindow", "NSResponder", "NSApplication"] }
+objc2-foundation = { version = "0.3", features = ["NSString", "NSArray", "NSObject", "NSURL"] }
+objc2-app-kit = { version = "0.3", features = ["NSRunningApplication", "NSWorkspace", "NSView", "NSWindow", "NSResponder", "NSApplication", "NSPasteboard", "NSPasteboardItem"] }
 tauri-nspanel = { git = "https://github.com/ahkohd/tauri-nspanel", rev = "a3122e8" }

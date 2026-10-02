@@ -40,6 +40,12 @@ function handleKeydown(event: KeyboardEvent) {
   }
 }
 
+function refreshClipboardPermissions() {
+  if (isDesktopPlatform.value && clipboardStore.monitoring) {
+    clipboardStore.refreshDiskAccess().catch(console.error)
+  }
+}
+
 function handlePointerdown() {
   unlockAlertAudio()
 }
@@ -105,6 +111,7 @@ async function ensureMobileBackListener() {
 }
 
 onMounted(async () => {
+  window.addEventListener('focus', refreshClipboardPermissions)
   window.addEventListener('keydown', handleKeydown)
   window.addEventListener('pointerdown', handlePointerdown)
   void initGlobalNotifications()
@@ -141,6 +148,7 @@ watch(() => clipboardStore.monitoring, (enabled) => {
 })
 
 onBeforeUnmount(() => {
+  window.removeEventListener('focus', refreshClipboardPermissions)
   window.removeEventListener('keydown', handleKeydown)
   window.removeEventListener('pointerdown', handlePointerdown)
   unlistenTrayNav?.()
@@ -154,6 +162,12 @@ onBeforeUnmount(() => {
     <div data-tauri-drag-region class="fixed top-0 left-0 right-0 h-9 z-40 bg-background" />
     <Sidebar class="pt-9" @command="commandOpen = true" />
     <main class="flex-1 overflow-y-auto pt-9">
+      <div v-if="clipboardStore.monitoring && ['denied', 'unknown'].includes(clipboardStore.diskAccess)" role="status" class="mx-6 mt-4 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+        <p>{{ t('clipboard.diskAccessGuide') }}</p>
+        <button class="mt-2 underline" @click="clipboardStore.openDiskAccessSettings().catch(console.error)">{{ t('clipboard.openDiskAccess') }}</button>
+        <button class="ml-4 underline" @click="refreshClipboardPermissions">{{ t('clipboard.recheckDiskAccess') }}</button>
+      </div>
+      <p v-if="clipboardStore.monitorError" role="alert" class="mx-6 mt-4 text-sm text-red-500">{{ t('clipboard.monitorFailed') }}</p>
       <RouterView v-slot="{ Component }">
         <Transition name="page" mode="out-in">
           <component :is="Component" />

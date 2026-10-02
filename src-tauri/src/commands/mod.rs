@@ -1,6 +1,7 @@
 pub mod ai;
 pub mod alarm;
 pub mod clipboard;
+pub mod clipboard_monitor;
 pub mod database;
 pub mod mysql;
 pub mod mysql_users;
