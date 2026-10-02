@@ -57,11 +57,11 @@ fn emit_transfer_progress(
     total_bytes: Option<u64>,
 ) {
     let percent = total_bytes.map(|total| {
-        if total == 0 {
-            100
-        } else {
-            ((processed_bytes.saturating_mul(100) / total).min(100)) as u8
-        }
+        processed_bytes
+            .saturating_mul(100)
+            .checked_div(total)
+            .unwrap_or(100)
+            .min(100) as u8
     });
 
     let _ = app.emit(
@@ -770,19 +770,19 @@ fn mysql_import_blocking(
 }
 
 fn find_mysql() -> Option<PathBuf> {
-    if let Some(path) = std::env::var_os("NALU_MYSQL_PATH").map(PathBuf::from) {
-        if path.is_file() {
-            return Some(path);
-        }
+    if let Some(path) = std::env::var_os("NALU_MYSQL_PATH").map(PathBuf::from)
+        && path.is_file()
+    {
+        return Some(path);
     }
 
-    if let Ok(executable) = std::env::current_exe() {
-        if let Some(directory) = executable.parent() {
-            for name in mysql_binary_names() {
-                let path = directory.join(name);
-                if path.is_file() {
-                    return Some(path);
-                }
+    if let Ok(executable) = std::env::current_exe()
+        && let Some(directory) = executable.parent()
+    {
+        for name in mysql_binary_names() {
+            let path = directory.join(name);
+            if path.is_file() {
+                return Some(path);
             }
         }
     }

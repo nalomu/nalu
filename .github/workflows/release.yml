@@ -92,10 +92,18 @@ jobs:
       - name: Build server
         run: cargo build -p nalu-server --release --target ${{ matrix.target }}
 
+      - name: Prepare platform-specific server asset
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp "target/${{ matrix.target }}/release/nalu-server${{ runner.os == 'Windows' && '.exe' || '' }}" "dist/nalu-server-${{ matrix.name }}${{ runner.os == 'Windows' && '.exe' || '' }}"
+
+      - name: Ad-hoc sign macOS server
+        if: runner.os == 'macOS'
+        run: codesign --force --sign - "dist/nalu-server-${{ matrix.name }}"
+
       - name: Upload server binary to release
         uses: softprops/action-gh-release@v2
         with:
           draft: true
-          files: |
-            target/${{ matrix.target }}/release/nalu-server
-            target/${{ matrix.target }}/release/nalu-server.exe
+          files: dist/*
