@@ -1,6 +1,6 @@
 [package]
 name = "nalu"
-version = "0.4.4"
+version = "0.4.5"
 description = "Nalu - Local-first personal assistant base"
 authors = ["Nalomu"]
 edition = "2024"
