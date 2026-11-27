@@ -1,0 +1,29 @@
+[
+  {
+    "id": "gentle-bell",
+    "midi": "scripts/sounds/midi/nalu-gentle-bell.mid",
+    "wav": "static/sounds/nalu-gentle-bell.wav",
+    "duration": 2.9,
+    "reverb": 26.0,
+    "fadeOut": 0.3,
+    "peakDb": -2.0
+  },
+  {
+    "id": "warm-chime",
+    "midi": "scripts/sounds/midi/nalu-warm-chime.mid",
+    "wav": "static/sounds/nalu-warm-chime.wav",
+    "duration": 4.0,
+    "reverb": 22.0,
+    "fadeOut": 0.45,
+    "peakDb": -1.5
+  },
+  {
+    "id": "soft-rise",
+    "midi": "scripts/sounds/midi/nalu-soft-rise.mid",
+    "wav": "static/sounds/nalu-soft-rise.wav",
+    "duration": 4.0,
+    "reverb": 28.0,
+    "fadeOut": 0.55,
+    "peakDb": -1.8
+  }
+]

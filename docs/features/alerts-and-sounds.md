@@ -45,8 +45,23 @@
 
 提醒音不应该只是一声短 beep。建议准备三类默认音：
 
-- **轻提示**：番茄钟开始，短、柔和、低干扰。
-- **阶段完成**：番茄钟结束，比开始音更明确，但不需要持续循环。
-- **闹钟**：可循环、辨识度高、频率不刺耳，适合用户必须处理的提醒。
+- **轻提示（`gentle-bell` / 轻柔铃音）**：番茄钟开始，F 大调钢片琴 + 颤音琴 + 竖琴，短、柔和、低干扰（2.9s）。
+- **阶段完成（`soft-rise` / 渐进晨光）**：番茄钟结束，E♭ 大调竖琴上行琶音 + 钢片琴 + 电钢和弦，舒展明朗、完成感明确（4.0s）。
+- **闹钟（`warm-chime` / 暖色和弦）**：D 大调颤音琴 + Rhodes 电钢 + 马林巴，精确 4.0s（120 BPM 两小节）无缝循环、辨识度高、不刺耳。
+
+## MIDI 源文件与重新渲染
+
+三首内置预设由标准 Type-1 MIDI 文件（`scripts/sounds/midi/*.mid`）通过 macOS 内置 General MIDI 音色库离线渲染为 44.1 kHz 16-bit 立体声 WAV 输出到 `static/sounds/`：
+
+```bash
+# 重新生成 MIDI 并渲染全部内置 WAV
+pnpm sounds:build
+
+# 如果用 DAW（GarageBand / Logic / MuseScore 等）手动修改了 .mid，仅重新渲染 WAV
+node scripts/sounds/build-sounds.mjs --render-only
+
+# 指定自定义 SoundFont（.sf2 / .dls）渲染
+node scripts/sounds/build-sounds.mjs --render-only --soundfont /path/to/custom.sf2
+```
 
 自定义铃声保存时只保存文件路径和显示名称；数据库中的单个闹钟只存覆盖配置，不复制全局设置。

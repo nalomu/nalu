@@ -10,6 +10,9 @@ vi.mock("@tauri-apps/api/event", () => ({
 }));
 
 // ── Web Audio API Mock ────────────────────────────────────
+const createdOscillators: MockOscillatorNode[] = [];
+const createdContexts: MockAudioContext[] = [];
+
 class MockOscillatorNode {
   type = "sine";
   frequency = { value: 0 };
@@ -19,6 +22,7 @@ class MockOscillatorNode {
   stop = vi.fn(() => { this._stopped = true; this.playbackState = 3; });
   connect = vi.fn();
   disconnect = vi.fn();
+  addEventListener = vi.fn();
 }
 
 class MockGainNode {
@@ -32,26 +36,48 @@ class MockGainNode {
   disconnect = vi.fn();
 }
 
+class MockBiquadFilterNode {
+  type = "lowpass";
+  frequency = { value: 0 };
+  Q = { value: 0 };
+  connect = vi.fn();
+  disconnect = vi.fn();
+}
+
 class MockAudioContext {
   state = "running";
   currentTime = 0;
   destination = {};
-  createOscillator = vi.fn(() => new MockOscillatorNode());
+  constructor() {
+    createdContexts.push(this);
+  }
+  createOscillator = vi.fn(() => {
+    const osc = new MockOscillatorNode();
+    createdOscillators.push(osc);
+    return osc;
+  });
   createGain = vi.fn(() => new MockGainNode());
+  createBiquadFilter = vi.fn(() => new MockBiquadFilterNode());
   resume = vi.fn(() => Promise.resolve());
+  close = vi.fn(() => {
+    this.state = "closed";
+    return Promise.resolve();
+  });
 }
 
 // Install the mock globally
 vi.stubGlobal("AudioContext", MockAudioContext);
 
 // Import AFTER mocking
-const { playAlertChime, startLoopingAlert, stopLoopingAlert } = await import(
+const { midiToFrequency, playAlertChime, startLoopingAlert, stopLoopingAlert } = await import(
   "$lib/utils/alertSound"
 );
 
 describe("alertSound", () => {
   beforeEach(() => {
     vi.useFakeTimers();
+    createdOscillators.length = 0;
+    createdContexts.length = 0;
   });
 
   afterEach(() => {
@@ -60,46 +86,58 @@ describe("alertSound", () => {
     vi.restoreAllMocks();
   });
 
-  it("playAlertChime plays without error", () => {
-    expect(() => playAlertChime()).not.toThrow();
+  it("converts MIDI note numbers to standard frequencies", () => {
+    expect(midiToFrequency(69)).toBeCloseTo(440, 5);
+    expect(midiToFrequency(60)).toBeCloseTo(261.6256, 3);
+    expect(midiToFrequency(81)).toBeCloseTo(880, 5);
+  });
+
+  it("playAlertChime schedules MIDI synth voices and stops previous one-shot oscillators", () => {
+    playAlertChime({ type: "synth" }, 0.8);
+    const firstBatch = [...createdOscillators];
+    expect(firstBatch.length).toBeGreaterThan(0);
+
+    // Calling again stops the previous one-shot oscillators cleanly
+    playAlertChime({ type: "synth" }, 0.8);
+    expect(firstBatch.every((osc) => osc._stopped)).toBe(true);
+    expect(createdOscillators.length).toBeGreaterThan(firstBatch.length);
   });
 
   it("startLoopingAlert plays chime and schedules next", () => {
-    startLoopingAlert();
-    // First chime plays immediately
-    expect(true).toBe(true); // no crash
+    startLoopingAlert({ type: "synth" }, 0.8);
+    const firstCount = createdOscillators.length;
+    expect(firstCount).toBeGreaterThan(0);
 
-    // Advance 3.2s (melody 2.2s + 1s pause) → second chime
-    vi.advanceTimersByTime(3200);
-    expect(true).toBe(true); // still running
+    // Advance 4.0s loop interval → second chime
+    vi.advanceTimersByTime(4000);
+    expect(createdOscillators.length).toBeGreaterThan(firstCount);
   });
 
   it("stopLoopingAlert stops the loop", () => {
-    startLoopingAlert();
+    startLoopingAlert({ type: "synth" }, 0.8);
+    const countBeforeStop = createdOscillators.length;
 
     // Stop after first chime
     stopLoopingAlert();
 
     // Advance past where next chime would be
     vi.advanceTimersByTime(5000);
-    // If loop wasn't stopped, this would have created more oscillators
-    expect(true).toBe(true); // no crash = stopped cleanly
+    expect(createdOscillators.length).toBe(countBeforeStop);
   });
 
   it("stopLoopingAlert kills active oscillators", () => {
-    startLoopingAlert();
-    // Stop should not throw even with active oscillators
+    startLoopingAlert({ type: "synth" }, 0.8);
     expect(() => stopLoopingAlert()).not.toThrow();
+    expect(createdContexts[createdContexts.length - 1]?.close).toHaveBeenCalled();
   });
 
   it("can start and stop multiple times", () => {
-    startLoopingAlert();
+    startLoopingAlert({ type: "synth" }, 0.8);
     stopLoopingAlert();
-    startLoopingAlert();
+    startLoopingAlert({ type: "synth" }, 0.8);
     stopLoopingAlert();
-    startLoopingAlert();
+    startLoopingAlert({ type: "synth" }, 0.8);
     stopLoopingAlert();
-    // Should handle repeated start/stop gracefully
-    expect(true).toBe(true);
+    expect(createdContexts.length).toBe(3);
   });
 });

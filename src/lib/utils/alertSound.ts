@@ -41,22 +41,39 @@ function getCtx(): AudioContext {
   return audioCtx;
 }
 
-interface Note {
-  freq: number;
+interface MidiSynthNote {
+  midi: number;
   time: number;
   duration: number;
-  volume: number;
+  velocity: number;
+  voice: "bell" | "pad";
 }
 
-const CHIME_NOTES: Note[] = [
-  { freq: 523,  time: 0.0,  duration: 0.55, volume: 0.35 },
-  { freq: 659,  time: 0.2,  duration: 0.55, volume: 0.35 },
-  { freq: 784,  time: 0.45, duration: 0.55, volume: 0.40 },
-  { freq: 1047, time: 0.75, duration: 0.65, volume: 0.45 },
-  { freq: 880,  time: 1.1,  duration: 0.9,  volume: 0.30 },
+export function midiToFrequency(midi: number): number {
+  return 440 * Math.pow(2, (midi - 69) / 12);
+}
+
+// MIDI-driven Dmaj9 chime melody for Classic Synth & Web Audio fallback
+const SYNTH_CHIME_NOTES: MidiSynthNote[] = [
+  // Warm chord bed (Dmaj9 -> Gmaj7 -> Dmaj9)
+  { midi: 62, time: 0.00, duration: 1.05, velocity: 54, voice: "pad" }, // D4
+  { midi: 69, time: 0.02, duration: 1.03, velocity: 50, voice: "pad" }, // A4
+  { midi: 67, time: 0.80, duration: 0.90, velocity: 52, voice: "pad" }, // G4
+  { midi: 71, time: 0.82, duration: 0.88, velocity: 48, voice: "pad" }, // B4
+  { midi: 62, time: 1.48, duration: 1.45, velocity: 54, voice: "pad" }, // D4
+  { midi: 69, time: 1.50, duration: 1.43, velocity: 56, voice: "pad" }, // A4
+  { midi: 76, time: 1.52, duration: 1.40, velocity: 46, voice: "pad" }, // E5
+
+  // Bell-like upper chime phrase
+  { midi: 78, time: 0.00, duration: 0.95, velocity: 84, voice: "bell" }, // F#5
+  { midi: 81, time: 0.24, duration: 0.95, velocity: 82, voice: "bell" }, // A5
+  { midi: 86, time: 0.50, duration: 1.15, velocity: 92, voice: "bell" }, // D6
+  { midi: 85, time: 0.84, duration: 0.85, velocity: 76, voice: "bell" }, // C#6
+  { midi: 81, time: 1.12, duration: 0.90, velocity: 78, voice: "bell" }, // A5
+  { midi: 78, time: 1.48, duration: 1.45, velocity: 88, voice: "bell" }, // F#5
+  { midi: 86, time: 1.52, duration: 1.38, velocity: 60, voice: "bell" }, // D6 shimmer
 ];
 
-const MELODY_LENGTH = 2.2;
 const LOOP_INTERVAL_SECONDS = 4.0;
 
 export const PRESET_ALERT_SOUNDS = [
@@ -76,19 +93,6 @@ function resolveSoundUrl(choice?: SoundChoice): string | null {
   return preset?.url || null;
 }
 
-function playAudioUrl(url: string, volume = 1): Promise<void> {
-  const audio = new Audio(url);
-  audio.preload = "auto";
-  audio.volume = clampVolume(volume);
-  activeAudio.add(audio);
-  audio.addEventListener("ended", () => activeAudio.delete(audio), { once: true });
-  audio.addEventListener("error", () => activeAudio.delete(audio), { once: true });
-  return audio.play().catch((error) => {
-    activeAudio.delete(audio);
-    throw error;
-  });
-}
-
 function stopOneShotAlert() {
   oneShotGeneration++;
   if (oneShotAudio) {
@@ -103,52 +107,125 @@ function stopOneShotAlert() {
   oneShotOscillators.clear();
 }
 
+function scheduleSynthPartial(
+  ctx: AudioContext,
+  destination: AudioNode,
+  options: {
+    type: OscillatorType;
+    freq: number;
+    startTime: number;
+    attack: number;
+    duration: number;
+    peakGain: number;
+    trackOneShot: boolean;
+  }
+) {
+  const osc = ctx.createOscillator();
+  osc.type = options.type;
+  osc.frequency.value = options.freq;
+
+  const gain = ctx.createGain();
+  gain.gain.setValueAtTime(0.0001, options.startTime);
+  gain.gain.linearRampToValueAtTime(Math.max(0.0002, options.peakGain), options.startTime + options.attack);
+  gain.gain.exponentialRampToValueAtTime(0.0001, options.startTime + options.duration);
+
+  osc.connect(gain);
+  gain.connect(destination);
+
+  if (options.trackOneShot) {
+    oneShotOscillators.add(osc);
+    const cleanup = () => {
+      oneShotOscillators.delete(osc);
+      try { osc.disconnect(); } catch { /* ignore */ }
+      try { gain.disconnect(); } catch { /* ignore */ }
+    };
+    osc.addEventListener?.("ended", cleanup, { once: true });
+  }
+
+  osc.start(options.startTime);
+  osc.stop(options.startTime + options.duration + 0.02);
+}
+
 function playChime(volume = 1, trackOneShot = false, expectedOneShotGeneration = oneShotGeneration) {
   try {
     if (trackOneShot && expectedOneShotGeneration !== oneShotGeneration) return;
     const ctx = getCtx();
     if (ctx.state === "closed") return;
     const normalizedVolume = clampVolume(volume);
+    if (normalizedVolume <= 0) return;
 
-    const now = ctx.currentTime;
-    for (const note of CHIME_NOTES) {
-      const osc = ctx.createOscillator();
-      osc.type = "sine";
-      osc.frequency.value = note.freq;
+    const masterGain = ctx.createGain();
+    masterGain.gain.value = normalizedVolume * 0.42;
 
-      const osc2 = ctx.createOscillator();
-      osc2.type = "sine";
-      osc2.frequency.value = note.freq * 2;
+    let synthBus: AudioNode = masterGain;
+    if (typeof ctx.createBiquadFilter === "function") {
+      const toneFilter = ctx.createBiquadFilter();
+      toneFilter.type = "lowpass";
+      toneFilter.frequency.value = 4200;
+      toneFilter.Q.value = 0.7;
+      toneFilter.connect(masterGain);
+      synthBus = toneFilter;
+    }
+    masterGain.connect(ctx.destination);
 
-      const gain = ctx.createGain();
-      gain.gain.setValueAtTime(0, now + note.time);
-      gain.gain.linearRampToValueAtTime(note.volume * normalizedVolume, now + note.time + 0.02);
-      gain.gain.exponentialRampToValueAtTime(0.001, now + note.time + note.duration);
+    const now = ctx.currentTime + 0.01;
+    for (const note of SYNTH_CHIME_NOTES) {
+      const freq = midiToFrequency(note.midi);
+      const velocityGain = (note.velocity / 127) * (note.voice === "bell" ? 0.55 : 0.24);
+      const startTime = now + note.time;
 
-      const gain2 = ctx.createGain();
-      gain2.gain.setValueAtTime(0, now + note.time);
-      gain2.gain.linearRampToValueAtTime(note.volume * 0.12 * normalizedVolume, now + note.time + 0.02);
-      gain2.gain.exponentialRampToValueAtTime(0.001, now + note.time + note.duration * 0.7);
-
-      osc.connect(gain);
-      osc2.connect(gain2);
-      gain.connect(ctx.destination);
-      gain2.connect(ctx.destination);
-
-      if (trackOneShot) {
-        oneShotOscillators.add(osc);
-        oneShotOscillators.add(osc2);
-        const cleanup = () => {
-          oneShotOscillators.delete(osc);
-          oneShotOscillators.delete(osc2);
-        };
-        osc.addEventListener("ended", cleanup, { once: true });
+      if (note.voice === "bell") {
+        // Fundamental tone
+        scheduleSynthPartial(ctx, synthBus, {
+          type: "sine",
+          freq,
+          startTime,
+          attack: 0.012,
+          duration: note.duration,
+          peakGain: velocityGain,
+          trackOneShot,
+        });
+        // Warm octave harmonic
+        scheduleSynthPartial(ctx, synthBus, {
+          type: "sine",
+          freq: freq * 2,
+          startTime,
+          attack: 0.01,
+          duration: note.duration * 0.62,
+          peakGain: velocityGain * 0.22,
+          trackOneShot,
+        });
+        // Crisp struck bell shimmer overtone
+        scheduleSynthPartial(ctx, synthBus, {
+          type: "sine",
+          freq: freq * 3,
+          startTime,
+          attack: 0.006,
+          duration: Math.min(0.28, note.duration * 0.28),
+          peakGain: velocityGain * 0.07,
+          trackOneShot,
+        });
+      } else {
+        // Warm pad/EP harmonic bed
+        scheduleSynthPartial(ctx, synthBus, {
+          type: "triangle",
+          freq,
+          startTime,
+          attack: 0.035,
+          duration: note.duration,
+          peakGain: velocityGain,
+          trackOneShot,
+        });
+        scheduleSynthPartial(ctx, synthBus, {
+          type: "sine",
+          freq: freq * 2,
+          startTime,
+          attack: 0.03,
+          duration: note.duration * 0.55,
+          peakGain: velocityGain * 0.09,
+          trackOneShot,
+        });
       }
-
-      osc.start(now + note.time);
-      osc.stop(now + note.time + note.duration);
-      osc2.start(now + note.time);
-      osc2.stop(now + note.time + note.duration * 0.7);
     }
   } catch (e) {
     console.error("[alertSound] playChime error:", e);
